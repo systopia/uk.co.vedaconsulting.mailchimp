@@ -3,6 +3,37 @@
 class CRM_Mailchimp_Utils {
 
   const MC_SETTING_GROUP = 'MailChimp Preferences';
+
+  // Which class will offer the Mailchimp API?
+  static $mailchimp_api_service = 'CRM_Mailchimp_Api3';
+  /**
+   * Returns an API class for talking to Mailchimp.
+   *
+   * Using a factory function like this allows dependency injection, so test
+   * environments can set CRM_Mailchimp_Utils::$mailchimp_api_service to a
+   * different class name.
+   *
+   * Drupal 8 implementations could provide this as a service in future, but
+   * as CiviCRM needs to run on other platforms it's done this way.
+   *
+   */
+  static function getMailchimpApi() {
+
+    // Singleton pattern.
+    static $api;
+    if (!isset($api)) {
+      $class = static::$mailchimp_api_service;
+      $api = new $class([
+          'api_key' => CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key')
+          ]);
+    }
+
+    return $api;
+  }
+
+  /**
+   * deprecated (soon!) v1 API
+   */
   static function mailchimp() {
     $apiKey   = CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key');
     $mcClient = new Mailchimp($apiKey);
