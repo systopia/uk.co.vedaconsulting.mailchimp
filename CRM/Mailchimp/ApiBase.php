@@ -99,7 +99,7 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
     $this->request = (object) [
       'method' => $method,
       'url' => $this->server . $url,
-      'headers' => "Content-Type: Application/json;charset=UTF-8;",
+      'headers' => "Content-Type: Application/json;charset=UTF-8",
       'userpwd' => "dummy:$this->api_key",
       'data' => '',
       // Mailchimp's certificate chain does not include trusted root for cert for
@@ -122,6 +122,58 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
       'data' => null,
       ];
 
+    return $this->sendRequest();
+  }
+  /**
+   * Send the request and prepare the response.
+   *
+   * @throw InvalidArgumentException if called with a url that does not begin
+   * with /.
+   * @throw CRM_Mailchimp_NetworkErrorException
+   * @throw CRM_Mailchimp_RequestErrorException
+   */
+  abstract protected function sendRequest();
+
+  /**
+   * Prepares the response object from the result of a cURL call.
+   *
+   * @return Array response object.
+   * @throw CRM_Mailchimp_RequestErrorException
+   * @throw CRM_Mailchimp_NetworkErrorException
+   * @param array $info output of curl_getinfo().
+   * @param string|null $result output of curl_exec().
+   */
+  protected function curlResultToResponse($info, $result) {
+
+    // Check response.
+    if (empty($info['http_code'])) {
+      throw new CRM_Mailchimp_NetworkErrorException($this);
+    }
+
+    // Copy http_code into response object. (May yet be used by exceptions.)
+    $this->response->http_code = $info['http_code'];
+
+    // was JSON returned, as expected?
+    $json_returned = isset($info['content_type'])
+      && preg_match('@^application/(problem\+)?json\b@i', $info['content_type']);
+
+    if (!$json_returned) {
+      // According to Mailchimp docs it may return non-JSON in event of a
+      // timeout.
+      throw new CRM_Mailchimp_NetworkErrorException($this);
+    }
+
+    $this->response->data = $result ? json_decode($result) : null;
+
+    // Check for errors and throw appropriate CRM_Mailchimp_ExceptionBase.
+    switch (substr((string) $this->response->http_code, 0, 1)) {
+    case '4': // 4xx errors
+      throw new CRM_Mailchimp_RequestErrorException($this);
+    case '5': // 5xx errors
+      throw new CRM_Mailchimp_NetworkErrorException($this);
+    }
+
+    // All good return response as a convenience.
     return $this->response;
   }
 }
