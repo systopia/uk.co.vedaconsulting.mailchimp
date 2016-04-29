@@ -45,8 +45,8 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
   /**
    * Perform a GET request.
    */
-  public function get($url) {
-    return $this->request('GET', $url);
+  public function get($url, $data=null) {
+    return $this->request('GET', $url, $data);
   }
 
   /**
@@ -73,7 +73,7 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
   /**
    * Perform a DELETE request.
    */
-  public function delete($url) {
+  public function delete($url, $data=null) {
     return $this->request('DELETE', $url);
   }
 
@@ -101,6 +101,7 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
       'url' => $this->server . $url,
       'headers' => "Content-Type: Application/json;charset=UTF-8",
       'userpwd' => "dummy:$this->api_key",
+      // Set ZLS for default data.
       'data' => '',
       // Mailchimp's certificate chain does not include trusted root for cert for
       // some popular OSes (e.g. Debian Jessie, April 2016) so disable SSL verify
@@ -112,8 +113,17 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
     ];
 
     if ($data !== null) {
-      $this->request->data = json_encode($data);
-      $this->request->headers .= "\r\nContent-Length: " . strlen($this->request->data);
+      if ($this->request->method == 'GET') {
+        // For GET requests, data must be added as query string.
+        // Append if there's already a query string.
+        $this->request->url .= ((strpos($this->request->url, '?')===false) ? '?' : '&')
+           .http_build_query($data);
+      }
+      else {
+        // Other requests have it added as JSON
+        $this->request->data = json_encode($data);
+        $this->request->headers .= "\r\nContent-Length: " . strlen($this->request->data);
+      }
     }
 
     // We set up a null response.

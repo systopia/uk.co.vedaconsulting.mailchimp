@@ -19,27 +19,18 @@
  * @throws API_Exception
  */ 
 function civicrm_api3_mailchimp_getlists($params) {
-  $mcLists = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-  
-  $lists = array();
+  $api = CRM_Mailchimp_Utils::getMailchimpApi();
 
-  /**
-    * Fix for #155 - Sync limited to 25 MailChimp Lists
-  **/
-  $results = $mcLists->getList(NULL, 0, 100); //get max number of mailing lists i.e. 100
+  $query = ['offset' => 0, 'count' => 100, 'fields'=>'lists.id,lists.name'];
 
-  foreach($results['data'] as $list) {
-    $lists[$list['id']] = $list['name'];
-  }
-
-  $pages = ceil($results['total']/100); //calculate the number of page requests to be made to fetch all the mailing lists
-
-  for( $i=1; $i< $pages; $i++ ) {
-    $results = $mcLists->getList(NULL, $i, 100); //get 100 results for each page
-    foreach($results['data'] as $list) {
-      $lists[$list['id']] = $list['name'];
+  $lists = [];
+  do {
+    $data = $api->get('/lists', $query)->data;
+    foreach ($data->lists as $list) {
+      $lists[$list->id] = $list->name;
     }
-  }
+    $query['offset'] += 100;
+  } while ($query['offset'] * 100 < $data->total_items);
 
   return civicrm_api3_create_success($lists);
 }
@@ -65,7 +56,12 @@ function civicrm_api3_mailchimp_getmembercount($params) {
   return civicrm_api3_create_success($listmembercount);
 }
 /**
- * Mailchimp Get Mailchimp Groups API
+ * Mailchimp Get Mailchimp Groups API.
+ *
+ * Returns an array whose keys are interest grouping Ids and whose values are
+ * arrays. Nb. Mailchimp now (2016) talks "Interest Categories" which each
+ * contain "Interests". It used to talk of "groupings and groups" which was much
+ * more confusing!
  *
  * @param array $params
  * @return array API result descriptor

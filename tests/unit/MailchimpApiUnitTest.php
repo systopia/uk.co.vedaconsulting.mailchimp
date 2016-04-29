@@ -101,6 +101,32 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
     $this->assertEquals("Content-Type: Application/json;charset=UTF-8", $request->headers);
   }
   /**
+   * Check GET requests are being created properly.
+   */
+  public function testGetRequestQs() {
+    $api = $this->getApi();
+    $api->addMockResponse();
+    $response = $api->get('/foo', ['name'=>'bar']);
+    $request  = $api->request;
+
+    // Check the request URL was properly assembled.
+    $this->assertTrue(isset($request->url));
+    $this->assertEquals( "https://uk1.api.mailchimp.com/3.0/foo?name=bar", $request->url);
+  }
+  /**
+   * Check GET requests are being created properly.
+   */
+  public function testGetRequestQsAppend() {
+    $api = $this->getApi();
+    $api->addMockResponse();
+    $response = $api->get('/foo?x=1', ['name'=>'bar']);
+    $request  = $api->request;
+
+    // Check the request URL was properly assembled.
+    $this->assertTrue(isset($request->url));
+    $this->assertEquals( "https://uk1.api.mailchimp.com/3.0/foo?x=1&name=bar", $request->url);
+  }
+  /**
    * Check GET requests throws exception if resource not found.
    *
    * @expectedException CRM_Mailchimp_RequestErrorException

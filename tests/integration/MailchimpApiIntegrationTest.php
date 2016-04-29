@@ -1,7 +1,7 @@
 <?php
 require 'integration-test-bootstrap.php';
 
-class MailchimpApiTest extends \PHPUnit_Framework_TestCase {
+class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
   /**
    * Test that we can connect to the API and retrieve certain data
    */
@@ -44,5 +44,37 @@ class MailchimpApiTest extends \PHPUnit_Framework_TestCase {
   public function test404() {
     CRM_Mailchimp_Utils::getMailchimpApi()->get('/lists/thisisnotavalidlisthash');
   }
-}
+  /**
+   * Test that we can get members' details, like the old export API.
+   */
+  public function testExport() {
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
 
+    // Assumes there is at least one list with at least 10 people on it.
+    $result = $api->get('/lists');
+    $list_id = $result->data->lists[0]->id;
+    $result = $api->get("/lists/$list_id/members?count=5");
+    $this->assertEquals(200, $result->http_code);
+    $this->assertEquals(5, count($result->data->members));
+  }
+  /**
+   * Test CiviCRM API function to get mailchimp lists.
+   */
+  public function testCiviCrmApiGetLists() {
+    $params = [];
+    $lists = civicrm_api3('Mailchimp', 'getlists', $params);
+    $a=1;
+  }
+  /**
+   * Test syncCollectMailchimp WIP.
+   */
+  public function testSCM() {
+    return;
+    $list_id = 'dea38e8063';
+    //CRM_Mailchimp_Form_Sync::syncCollectMailchimp($list_id);
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $data = $api->get("/lists", ['fields'=>'lists.id,lists.name'])->data;
+    $a=1;
+    //$data = $api->get("/lists/$list_id/interest-categories")->data;
+  }
+}

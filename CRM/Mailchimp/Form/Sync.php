@@ -384,64 +384,34 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
 
     // Cheekily access the database directly to obtain a prepared statement.
     $db = $dao->getDatabaseConnection();
-	$insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, euid, leid, hash, groupings) VALUES(?, ?, ?, ?, ?, ?, ?)');
+    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, euid, leid, hash, groupings) VALUES(?, ?, ?, ?, ?, ?, ?)');
 
     // We need to know what grouping data we care about. The rest we completely ignore.
-    // We only care about CiviCRM groups that are mapped to this MC List:
+    // We only care about CiviCRM groups that are mapped to this MC List.
     $mapped_groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), $listID);
 
     CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Sync syncCollectMailchimp $mapped_groups', $mapped_groups);
 
-    // Prepare to access Mailchimp export API
-    // See http://apidocs.mailchimp.com/export/1.0/list.func.php
-    // Example result (spacing added)
-    //  ["Email Address"  , "First Name" , "Last Name"  , "CiviCRM"          , "MEMBER_RATING" , "OPTIN_TIME" , "OPTIN_IP" , "CONFIRM_TIME"        , "CONFIRM_IP"  , "LATITUDE" , "LONGITUDE" , "GMTOFF" , "DSTOFF" , "TIMEZONE" , "CC" , "REGION" , "LAST_CHANGED"        , "LEID"      , "EUID"       , "NOTES"]
-    //  ["f2@example.com" , "Fred"       , "Flintstone" , "general, special" , 2               , ""           , null       , "2014-09-11 19:57:53" , "212.x.x.x"   , null       , null        , null     , null     , null       , null , null     , "2014-09-11 20:02:26" , "180020969" , "884d72639d" , null]
-    $apiKey   = CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key');
-    // The datacentre is usually appended to the apiKey after a hyphen.
-    $dataCentre = 'us1'; // default.
-    if (preg_match('/-(.+)$/', $apiKey, $matches)) {
-      $dataCentre = $matches[1];
-    }
-    $url = "https://$dataCentre.api.mailchimp.com/export/1.0/list?apikey=$apiKey&id=$listID";
-    $chunk_size = 4096; //in bytes
-    $handle = @fopen($url,'r');
-    if (!$handle) {
-      // @todo not sure a vanilla exception is best?
-      throw new \Exception("Failed to access Mailchimp export API");
-    }
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $offset = 0;
+    $batch_size = 100;
+    $total = null;
 
-    // Load headers from the export.
-    // This is an array of strings. We need to find the array indexes for the columns we're interested in.
-    $buffer = fgets($handle, $chunk_size);
-    if (trim($buffer)=='') {
-      // @todo not sure a vanilla exception is best?
-      throw new \Exception("Failed to read from Mailchimp export API");
-    }
-    $header = json_decode($buffer);
-    // We need to know the indexes of our groupings
-    foreach ($mapped_groups as $civi_group_id => &$details) {
-      if (!$details['grouping_name']) {
-        // this will be the membership group.
-        continue;
+    $fetch_batch = function() use($api, &$offset, &$total, $batch_size, $listID) {
+      if ($total !== null && $offset >= $total) {
+        // End of results.
+        return [];
       }
-      $details['idx'] = array_search($details['grouping_name'], $header);
-    }
-    unset($details);
-    // ... and LEID and EUID fields.
-    $leid_idx = array_search('LEID', $header);
-    $euid_idx = array_search('EUID', $header);
+      $response = $api->get("/lists/$listID/members", ['offset' => $offset, 'count' => $batch_size]);
+      $total = (int) $response->data->total_items;
+      $offset += $batch_size;
+      return $response->data->members;
+    };
 
     //
     // Main loop of all the records.
     //
-    while (!feof($handle)) {
-      $buffer = trim(fgets($handle, $chunk_size));
-      if (!$buffer) {
-        continue;
-      }
-      // fetch array of columns.
-      $subscriber = json_decode($buffer);
+    while ($members = $fetch_batch()) {
 
       // Find out which of our mapped groups apply to this subscriber.
       $info = array();

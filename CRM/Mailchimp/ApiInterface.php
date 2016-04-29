@@ -37,7 +37,7 @@ interface CRM_Mailchimp_ApiInterface {
   /**
    * Perform a GET request.
    */
-  public function get($url);
+  public function get($url, $data=null);
 
   /**
    * Perform a POST request.
@@ -57,7 +57,7 @@ interface CRM_Mailchimp_ApiInterface {
   /**
    * Perform a DELETE request.
    */
-  public function delete($url);
+  public function delete($url, $data=null);
 
 }
 
