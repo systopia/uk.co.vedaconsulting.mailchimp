@@ -47,11 +47,16 @@ class CRM_Mailchimp_Utils {
    * Indexed by CiviCRM groupId, including:
    *
    * - list_id    (MC)
-   * - grouping_id(MC)
-   * - group_id   (MC)
+   * - grouping_id(MC) // deprecate
+   * - grouping_name (MC) // deprecate
+   * - group_id   (MC) // deprecate
+   * - group_name (MC) // deprecate
+   *
+   * - category_id(MC)
+   * - category_name (MC)
+   * - interest_id   (MC)
+   * - interest_name (MC)
    * - is_mc_update_grouping (bool) - is the subscriber allowed to update this via MC interface?
-   * - group_name (MC)
-   * - grouping_name (MC)
    * - civigroup_title
    * - civigroup_uses_cache boolean
    *
@@ -63,14 +68,7 @@ class CRM_Mailchimp_Utils {
   static function getGroupsToSync($groupIDs = array(), $mc_list_id = null, $membership_only = FALSE) {
 
     $params = $groups = $temp = array();
-	
-	foreach ($groupIDs as $value) {
-        if($value){
-          $temp[] = $value;
-        }
-    }
-	 
-	$groupIDs = $temp;
+    $groupIDs = array_filter(array_map('intval',$groupIDs));
 
     if (!empty($groupIDs)) {
       $groupIDs = implode(',', $groupIDs);
@@ -98,16 +96,25 @@ class CRM_Mailchimp_Utils {
       WHERE $whereClause";
     $dao = CRM_Core_DAO::executeQuery($query, $params);
     while ($dao->fetch()) {
+      $interest_name = CRM_Mailchimp_Utils::getMCGroupName($dao->mc_list_id, $dao->mc_grouping_id, $dao->mc_group_id);
+      $category_name = CRM_Mailchimp_Utils::getMCGroupingName($dao->mc_list_id, $dao->mc_grouping_id);
       $groups[$dao->entity_id] =
         array(
           'list_id'               => $dao->mc_list_id,
-          'grouping_id'           => $dao->mc_grouping_id,
-          'group_id'              => $dao->mc_group_id,
+          'category_id'           => $dao->mc_grouping_id,
+          'category_name'         => $category_name,
+          'interest_id'           => $dao->mc_group_id,
+          'interest_name'         => $interest_name,
+
           'is_mc_update_grouping' => $dao->is_mc_update_grouping,
-          'group_name'            => CRM_Mailchimp_Utils::getMCGroupName($dao->mc_list_id, $dao->mc_grouping_id, $dao->mc_group_id),
-          'grouping_name'         => CRM_Mailchimp_Utils::getMCGroupingName($dao->mc_list_id, $dao->mc_grouping_id),
           'civigroup_title'       => $dao->civigroup_title,
           'civigroup_uses_cache'    => (bool) (($dao->saved_search_id > 0) || (bool) $dao->children),
+
+          // Deprecated:
+          'grouping_id'           => $dao->mc_grouping_id,
+          'grouping_name'         => $category_name,
+          'group_id'              => $dao->mc_group_id,
+          'group_name'            => $interest_name,
         );
     }
 
@@ -217,7 +224,7 @@ class CRM_Mailchimp_Utils {
    *        ...
    *        ),
    *   ...
-   *   ) 
+   *   )
    *
    */
   static function getMCInterestGroupings($listID) {
@@ -231,38 +238,31 @@ class CRM_Mailchimp_Utils {
     if (!array_key_exists($listID, $mapper)) {
       $mapper[$listID] = array();
 
-      $mcLists = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-      try {
-        $results = $mcLists->interestGroupings($listID);
-        
-      }
-      catch (Exception $e) {
-        return NULL;
-      }
-      /*  re-map $result for quick access via grouping_id and groupId
-       *
-       *  Nb. keys for grouping:
-       *  - id
-       *  - name
-       *  - form_field    (not v interesting)
-       *  - display_order (not v interesting)
-       *  - groups: array as follows, keyed by GroupId
-       *
-       *  Keys for each group
-       *  - id
-       *  - bit ?
-       *  - name
-       *  - display_order
-       *  - subscribers ?
-       *
-       */
-      foreach ($results as $grouping) {
-        
+      $categories = CRM_Mailchimp_Utils::getMailchimpApi()
+        ->get("/lists/$listID/interest-categories",
+          ['fields' => 'categories.id,categories.title','count'=>10000])
+        ->data->categories;
+      // Re-map $categories from this:
+      //    id = (string [10]) `f192c59e0d`
+      //    title = (string [7]) `CiviCRM`
 
-        $mapper[$listID][$grouping['id']] = $grouping;
-        unset($mapper[$listID][$grouping['id']]['groups']);
-        foreach ($grouping['groups'] as $group) {
-          $mapper[$listID][$grouping['id']]['groups'][$group['id']] = $group;
+      foreach ($categories as $category) {
+        // Need to look up interests for this category.
+        $interests = CRM_Mailchimp_Utils::getMailchimpApi()
+          ->get("/lists/$listID/interest-categories/$category->id/interests",
+            ['fields' => 'interests.id,interests.name','count'=>10000])
+          ->data->interests;
+        foreach ($interests as $interest) {
+          $mapper[$listID][$category->id] = [
+            'id' => $category->id,
+            'name' => $category->title,
+            'interests' => [
+              $interest->id => [
+                  'id' => $interest->id,
+                  'name' => $interest->name,
+                ],
+              ],
+            ];
         }
       }
     }

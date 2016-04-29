@@ -69,12 +69,12 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
    * Test syncCollectMailchimp WIP.
    */
   public function testSCM() {
-    return;
     $list_id = 'dea38e8063';
-    //CRM_Mailchimp_Form_Sync::syncCollectMailchimp($list_id);
     $api = CRM_Mailchimp_Utils::getMailchimpApi();
-    $data = $api->get("/lists", ['fields'=>'lists.id,lists.name'])->data;
+    $response = $api->get("/lists/$list_id/members", ['count' => 50]);
+    //$mapped_groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), $list_id);
+    CRM_Mailchimp_Form_Sync::syncCollectMailchimp($list_id);
+    //$api = CRM_Mailchimp_Utils::getMailchimpApi(); $data = $api->get("/lists", ['fields'=>'lists.id,lists.name'])->data;
     $a=1;
-    //$data = $api->get("/lists/$list_id/interest-categories")->data;
   }
 }

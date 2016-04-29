@@ -371,7 +371,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
         euid VARCHAR(10),
         leid VARCHAR(10),
         hash CHAR(32),
-        groupings VARCHAR(4096),
+        interests VARCHAR(4096),
         cid_guess INT(10),
         PRIMARY KEY (email, hash))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
@@ -384,7 +384,8 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
 
     // Cheekily access the database directly to obtain a prepared statement.
     $db = $dao->getDatabaseConnection();
-    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, euid, leid, hash, groupings) VALUES(?, ?, ?, ?, ?, ?, ?)');
+    //$insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, euid, leid, hash, groupings) VALUES(?, ?, ?, ?, ?, ?, ?)');
+    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, hash, interests) VALUES(?, ?, ?, ?, ?)');
 
     // We need to know what grouping data we care about. The rest we completely ignore.
     // We only care about CiviCRM groups that are mapped to this MC List.
@@ -394,7 +395,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
 
     $api = CRM_Mailchimp_Utils::getMailchimpApi();
     $offset = 0;
-    $batch_size = 100;
+    $batch_size = 1000;
     $total = null;
 
     $fetch_batch = function() use($api, &$offset, &$total, $batch_size, $listID) {
@@ -402,7 +403,11 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
         // End of results.
         return [];
       }
-      $response = $api->get("/lists/$listID/members", ['offset' => $offset, 'count' => $batch_size]);
+      $response = $api->get("/lists/$listID/members", [
+        'offset' => $offset, 'count' => $batch_size,
+        'status' => 'subscribed',
+        'fields' => 'total_items,members.email_address,members.merge_fields,members.interests',
+      ]);
       $total = (int) $response->data->total_items;
       $offset += $batch_size;
       return $response->data->members;
@@ -411,30 +416,37 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
     //
     // Main loop of all the records.
     //
+    // Make an array of interests that aren't the 'membership' interest.
+    // for use in the inside loop below.
+    $mapped_interests = array_filter($mapped_groups, function($details) {
+      return (bool) $details['category_id'];
+    });
+
     while ($members = $fetch_batch()) {
-
-      // Find out which of our mapped groups apply to this subscriber.
-      $info = array();
-      foreach ($mapped_groups as $civi_group_id => $details) {
-        if (!$details['grouping_name']) {
-          // this will be the membership group.
-          continue;
+      foreach ($members as $member) {
+        // Find out which of our mapped groups apply to this subscriber.
+        // Save to an array like: $interests[categoryid][interestid] = (bool)
+        $interests = array();
+        foreach ($mapped_interests as $civi_group_id => $details) {
+          $interests[$details['category_id']][$details['interest_id']] = $member->interests->{$details['interest_id']};
         }
+        // Serialize the grouping array for SQL storage - this is the fastest way.
+        $interests = serialize($interests);
 
-        // Fetch the data for this grouping.
-        $mc_groups = explode(', ', $subscriber[ $details['idx'] ]);
-        // Is this mc group included?
-        $info[ $details['grouping_id'] ][ $details['group_id'] ] = in_array($details['group_name'], $mc_groups);
+        // we're ready to store this but we need a hash that contains all the info
+        // for comparison with the hash created from the CiviCRM data (elsewhere).
+        $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : null;
+        $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : null;
+        $hash = md5($member->email_addresss. $first_name. $last_name. $interests);
+        // run insert prepared statement
+        $db->execute($insert, [
+          $member->email_address,
+          $first_name,
+          $lasts_name,
+          $hash,
+          $groupings,
+        ]);
       }
-      // Serialize the grouping array for SQL storage - this is the fastest way.
-      $info = serialize($info);
-
-      // we're ready to store this but we need a hash that contains all the info
-      // for comparison with the hash created from the CiviCRM data (elsewhere).
-      //          email,           first name,      last name,      groupings
-      $hash = md5($subscriber[0] . $subscriber[1] . $subscriber[2] . $info);
-      // run insert prepared statement
-      $db->execute($insert, array($subscriber[0], $subscriber[1], $subscriber[2], $subscriber[$euid_idx], $subscriber[$leid_idx], $hash, $info));
     }
 
     // Tidy up.
@@ -483,10 +495,10 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
         PRIMARY KEY (id)
         );");
 
-    // We need to know what groupings we have maps to.
+    // We need to know what interests we have maps to.
     // We only care about CiviCRM groups that are mapped to this MC List:
     $mapped_groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), $listID);
-    
+
     // First, get all subscribers from the membership group for this list.
     // ... Find CiviCRM group id for the membership group.
     // ... And while we're at it, build an SQL-safe array of groupIds for groups mapped to groupings.
@@ -504,7 +516,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
     foreach ($mapped_groups as $group_id => $details) {
       $title2gid[$details['civigroup_title']] = $group_id;
       CRM_Contact_BAO_GroupContactCache::loadAll($group_id);
-      if (!$details['grouping_id']) {
+      if (!$details['category_id']) {
         $membership_group_id = $group_id;
       }
       else {
