@@ -437,14 +437,14 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
         // for comparison with the hash created from the CiviCRM data (elsewhere).
         $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : null;
         $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : null;
-        $hash = md5($member->email_addresss. $first_name. $last_name. $interests);
+        $hash = md5($member->email_address . $first_name . $last_name . $interests);
         // run insert prepared statement
         $db->execute($insert, [
           $member->email_address,
           $first_name,
           $lasts_name,
           $hash,
-          $groupings,
+          $interests,
         ]);
       }
     }
