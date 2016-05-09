@@ -60,14 +60,14 @@ abstract class CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
    * Perform a PUT request.
    */
   public function put($url, Array $data) {
-    return $this->request('PUT', $url);
+    return $this->request('PUT', $url, $data);
   }
 
   /**
    * Perform a PATCH request.
    */
   public function patch($url, Array $data) {
-    return $this->request('PATCH', $url);
+    return $this->request('PATCH', $url, $data);
   }
 
   /**

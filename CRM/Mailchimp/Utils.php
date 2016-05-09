@@ -6,29 +6,61 @@ class CRM_Mailchimp_Utils {
 
   // Which class will offer the Mailchimp API?
   static $mailchimp_api_service = 'CRM_Mailchimp_Api3';
+
+  // Mailchimp API object to use.
+  static protected $mailchimp_api;
+
+  /**
+   * Split a string of group titles into an array of groupIds.
+   *
+   * The Contact:get API is the only place you can get a list of all the groups
+   * (smart and normal) that a contact has membership of. But it returns them as
+   * a comma separated string. You can't split on a comma because there is no
+   * restriction on commas in group titles. So instead we take a list of
+   * candidate titles and look for those.
+   */
+  static function splitGroupTitles($group_titles, $group_details) {
+    $groups = [];
+    $group_titles = ",$group_titles,";
+    foreach ($group_details as $civi_group_id => $detail) {
+      if (strpos($group_titles, ",$detail[civigroup_title],") !== FALSE) {
+        $groups []= $civi_group_id; 
+      }
+    }
+    return $groups;
+  }
   /**
    * Returns an API class for talking to Mailchimp.
    *
-   * Using a factory function like this allows dependency injection, so test
-   * environments can set CRM_Mailchimp_Utils::$mailchimp_api_service to a
-   * different class name.
+   * This allows dependency injection, so test environments can deal with a
+   * non-live or mock API either through changing the default service provider
+   * in static::$mailchimp_api_service or through providing an API object with
+   * setMailchimpApi()
    *
    * Drupal 8 implementations could provide this as a service in future, but
    * as CiviCRM needs to run on other platforms it's done this way.
-   *
    */
   static function getMailchimpApi() {
 
     // Singleton pattern.
-    static $api;
-    if (!isset($api)) {
+    if (!isset(static::$mailchimp_api)) {
       $class = static::$mailchimp_api_service;
       $api = new $class([
           'api_key' => CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key')
           ]);
+      static::setMailchimpApi($api);
     }
 
-    return $api;
+    return static::$mailchimp_api;
+  }
+
+  /**
+   * Set the API object.
+   *
+   * This is for testing purposes only.
+   */
+  static function setMailchimpApi(CRM_Mailchimp_ApiInterface $api) {
+    static::$mailchimp_api = $api;
   }
 
   /**
@@ -771,6 +803,7 @@ class CRM_Mailchimp_Utils {
 			'version'       => 3,
 			'id'  					=> $contactID,
 		);
+
 		$contactResult = civicrm_api('Contact' , 'get' , $contactParams);
 		// This is the primary email address of the contact
 		$email = $contactResult['values'][$contactID]['email'];

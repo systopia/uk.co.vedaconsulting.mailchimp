@@ -413,6 +413,7 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 	/***** NO BULK EMAILS (User Opt Out) *****/
 	if ($objectName == 'Individual' || $objectName == 'Organization' || $objectName == 'Household') {
 		// Contact Edited
+    // @todo artfulrobot: I don't understand the cases this is dealing with.
 		if ($op == 'edit' || $op == 'create') {
 			if($objectRef->is_opt_out == 1) {
 				$action = 'unsubscribe';
@@ -442,36 +443,81 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 
 	/***** Contacts added/removed/deleted from CiviCRM group *****/
 	if ($objectName == 'GroupContact') {
+    // Determine if the action being taken needs to affect Mailchimp at all.
 		
-    // FIXME: Dirty hack to skip hook
+    if ($op == 'view') {
+      // Nothing changed; nothing to do.
+      return;
+    }
+
+    // FIXME: Dirty hack to skip hook in the case that a Pull from mailchimp has
+    // just happened, which will be changing CiviCRM group memberships.
 		require_once 'CRM/Core/Session.php';
     $session = CRM_Core_Session::singleton();
     $skipPostHook = $session->get('skipPostHook');
-	
-		// Added/Removed/Deleted - This works for both bulk action and individual add/remove/delete
-		if (($op == 'create' || $op == 'edit' || $op == 'delete') && empty($skipPostHook)) {
-			// Decide mailchimp action based on $op
-			// Add / Rejoin Group
-			if ($op == 'create' || $op == 'edit') {
-				$action = 'subscribe';
-			}
-			// Remove / Delete
-			elseif ($op == 'delete') {
-				$action = 'unsubscribe';
-			}
+		if (!empty($skipPostHook)) {
+      // In middle of a Pull. Don't do anything.
+      return;
+    }
+
+    // Get mailchimp details for the group.
+    // $objectId here means CiviCRM group Id.
+    $groups = CRM_Mailchimp_Utils::getGroupsToSync(array($objectId));
+    if (empty($groups[$objectId])) {
+      // This group has nothing to do with Mailchimp.
+      return;
+    }
+
+    // The updates we need to make can be complex.
+    // If someone left/joined a group synced as the membership group for a
+    // Mailchimp list, then that's a subscribe/unsubscribe option.
+    // If however it was a group synced to an interest in Mailchimp, then
+    // the join/leave on the CiviCRM side only means updating interests on the
+    // Mailchimp side, not a subscribe/unsubscribe.
+    // There is also the case that somone's been put into an interest group, but
+    // is not in the membership group, which should not result in them being
+    // subscribed at MC.
+    //
+    // Finally this hook is useful for small changes only; if you just added
+    // thousands of people to a group then this is NOT the way to tell Mailchimp
+    // about it as it would require thousands of separate API calls. This would
+    // probably cause big problems (like hitting the API rate limits, or
+    // crashing CiviCRM due to PHP max execution times etc.). Such updates must
+    // happen in the more controlled bulk update (push).
+
+    if (count($objectRef) > 1) {
+      // Limit application to one contact only.
+      return;
+    }
+
+    // Trigger mini sync for this person and this list.
+    $sync = new CRM_Mailchimp_Sync($groups[$objectId]['list_id']);
+    $sync->syncSingleContact($objectRef[0]);
+
+    /*
+    // Add / Rejoin Group
+    if ($op == 'create' || $op == 'edit') {
+      $action = 'subscribe';
+    }
+    // Remove / Delete
+    elseif ($op == 'delete') {
+      $action = 'unsubscribe';
+    }
 		
-			// Get mailchimp details for the group
-			$groups = CRM_Mailchimp_Utils::getGroupsToSync(array($objectId));
 			
 			// Proceed only if the group is configured with mailing list/groups
 			if (!empty($groups[$objectId])) {
 			
 				// Loop through all contacts added/removed from the group
+        // @todo artfulrobot this is gonig to cause problems if zillions of
+        // groupcontact record are assigned at once because each contact results
+        // in a separate API call.
 				foreach ($objectRef as $contactId) {
 					// Subscribe/Unsubscribe in Mailchimp
 					CRM_Mailchimp_Utils::subscribeOrUnsubsribeToMailchimpList($groups[$objectId], $contactId, $action);
 				}
 			}
 		}		
+     */
 	}
 }

@@ -25,6 +25,15 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
   protected static $civicrm_group_id_interest;
 
   /**
+   * array Test contact 1
+   */
+  protected static $civicrm_contact_1 = [
+    'contact_id' => NULL,
+    'first_name' => 'Wilma',
+    'last_name' => 'Flintstone-Test-Record',
+    ];
+
+  /**
    * Connect to API and create test fixture lists.
    */
   public static function setUpBeforeClass() {
@@ -164,7 +173,7 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
         'title' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
       ]);
     }
-    static::$civicrm_group_id_membership = $result['values'][0]['id'];
+    static::$civicrm_group_id_membership = (int) $result['values'][0]['id'];
 
     // Ensure this group is set to be the membership group.
     $result = civicrm_api3('Group', 'create', array(
@@ -177,15 +186,45 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
 
 
     // Now create test contact 1
-    
+    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
+    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
+      . '@' . $domain;
+    $result = civicrm_api3('Contact', 'get', ['sequential' => 1,
+      'first_name' => static::$civicrm_contact_1['first_name'],
+      'last_name'  => static::$civicrm_contact_1['last_name'],
+      'email'      => $email,
+      ]);
 
-
+    if ($result['count'] == 0) {
+      print "Creating contact...\n";
+      // Create the contact.
+      $result = civicrm_api3('Contact', 'create', ['sequential' => 1,
+        'contact_type' => 'Individual',
+        'first_name' => static::$civicrm_contact_1['first_name'],
+        'last_name'  => static::$civicrm_contact_1['last_name'],
+        'email'      => $email,
+      ]);
+    }
+    static::$civicrm_contact_1['contact_id'] = (int) $result['values'][0]['id'];
   }
   /**
    * Remove the test list, if one was successfully set up.
    */
   public static function tearDownAfterClass() {
     return;
+    // CiviCRM teardown.
+    if (!empty(static::$civicrm_contact_1['contact_id'])) {
+      print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
+      $contact_id = (int) static::$civicrm_contact_1['contact_id'];
+      if ($contact_id>0) {
+        $result = civicrm_api3('Contact', 'delete', [
+          'id' => $contact_id,
+          'skip_undelete' => 1,
+        ]);
+      }
+    }
+
+    // Mailchimp tear-down:
     if (empty(static::$api_contactable->http_code)
       || static::$api_contactable->http_code != 200
       || empty(static::$test_list_id)
@@ -250,15 +289,125 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
 
     $this->assertNotEmpty(static::$test_list_id);
     $this->assertInternalType('string', static::$test_list_id);
+    $this->assertGreaterThan(0, static::$civicrm_contact_1['contact_id']);
+  }
+  public function testPostHookSubscribesWhenAddedToMembershipGroup() {
+    //CRM_Mailchimp_Utils::setMailchimpApi(new CRM_Mailchimp_Api3Stub());
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+    // If someone is added to the CiviCRM group, then we should expect them to
+    // get subscribed.
+    // CRM_Mailchimp_Utils::setMailchimpApi(new CRM_Mailchimp_Api3Stub());
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_membership,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Added",
+    ]);
+
+    // Now test if that person is subscribed at MC.
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
+    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
+      . '@' . $domain;
+    $subscriber_hash = md5(strtolower($email));
+
+    try {
+      $result = $api->get("/lists/" . static::$test_list_id . "/members/$subscriber_hash", ['fields' => 'status']);
+    }
+    catch (CRM_Mailchimp_RequestErrorException $e) {
+      if ($e->response->http_code == 404) {
+        // Not subscribed.
+        $this->fail("Expected contact to be in the list at Mailchimp, but MC said resource not found; i.e. not subscribed.");
+      }
+      throw $e;
+    }
+    $this->assertEquals('subscribed', $result->data->status);
+
+    // Now remove them from the group.
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_membership,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Removed",
+    ]);
+    try {
+      $result = $api->get("/lists/" . static::$test_list_id . "/members/$subscriber_hash", ['fields' => 'status']);
+    }
+    catch (CRM_Mailchimp_RequestErrorException $e) {
+      if ($e->response->http_code == 404) {
+        // Not subscribed.
+        $this->fail("Expected contact to be in the list at Mailchimp, in an unsubscribed state but Mailchimp said not a member.");
+      }
+      throw $e;
+    }
+    $this->assertEquals('unsubscribed', $result->data->status);
+
+    // @todo what if the record was deleted. there would be no remove - so my
+    // optimization does not work :-(
+
   }
   /**
-   * Test that we can connect to the API and retrieve certain data
+   * Test the post hooks.
    */
-  public function testConnection() {
-    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+  public function xtestPostHooks() {
+    // Disable Mailchimp API for testing.
 
-    // Check we can connect and get account details.
-    $result = $api->get('/');
+    $result = civicrm_api3('GroupContact', 'create', array(
+      'sequential' => 1,
+      'group_id' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Added",
+    ));
+
+    // Now sync this list.
+    // We do this without CiviCRM's batch process.
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+
+    // Collect data from Mailchimp.
+    // There shouldn't be any members in this list yet.
+    $sync->collectMailchimp();
+    $this->assertEquals(0, $sync->countMailchimpMembers());
+
+    // Collect data from CiviCRM.
+    // There should be one member.
+    $sync->collectCiviCrm();
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+
+      //array('CRM_Mailchimp_Form_Sync', 'syncPushRemove'),
+      //array('CRM_Mailchimp_Form_Sync', 'syncPushAdd'),
+
+
+  }
+  /**
+   * Test that we can add someone to the Mailchimp list by
+   * adding them to the sync'ed group in CiviCRM.
+   */
+  public function xtestNewGroupMembersBecomeSubscribed() {
+    $result = civicrm_api3('GroupContact', 'create', array(
+      'sequential' => 1,
+      'group_id' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Added",
+    ));
+
+    // Now sync this list.
+    // We do this without CiviCRM's batch process.
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+
+    // Collect data from Mailchimp.
+    // There shouldn't be any members in this list yet.
+    $sync->collectMailchimp();
+    $this->assertEquals(0, $sync->countMailchimpMembers());
+
+    // Collect data from CiviCRM.
+    // There should be one member.
+    $sync->collectCiviCrm();
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+
+      //array('CRM_Mailchimp_Form_Sync', 'syncPushRemove'),
+      //array('CRM_Mailchimp_Form_Sync', 'syncPushAdd'),
+
+
   }
   /**
    * Test that we can connect to the API and retrieve lists.
