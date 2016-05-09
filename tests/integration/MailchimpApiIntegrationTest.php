@@ -3,10 +3,26 @@ require 'integration-test-bootstrap.php';
 
 class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
   const MC_TEST_LIST_NAME = 'Mailchimp-CiviCRM Integration Test List';
+  const MC_INTEREST_CATEGORY_TITLE = 'Test Interest Category';
+  const MC_INTEREST_NAME = 'Orang-utans';
+  const C_TEST_MEMBERSHIP_GROUP_NAME = 'mailchimp_integration_test_1';
+  const C_TEST_INTEREST_GROUP_NAME = 'mailchimp_integration_test_2';
   protected static $api_contactable;
   /** string holds the Mailchimp Id for our test list. */
   protected static $test_list_id;
-  protected static $fixture;
+  /** string holds the Mailchimp Id for test interest category. */
+  protected static $test_interest_category_id;
+  /** string holds the Mailchimp Id for test interest. */
+  protected static $test_interest_id;
+
+  /** holds CiviCRM contact Id for test contact 1*/
+  protected static $test_cid1;
+  /** holds CiviCRM contact Id for test contact 2*/
+  protected static $test_cid2;
+  /** holds CiviCRM Group Id for membership group*/
+  protected static $civicrm_group_id_membership;
+  /** holds CiviCRM Group Id for interest group*/
+  protected static $civicrm_group_id_interest;
 
   /**
    * Connect to API and create test fixture lists.
@@ -37,7 +53,7 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
         $contact['address2'] = $contact['addr2'];
         unset($contact['addr1'], $contact['addr2']);
 
-        $list = $api->post('/lists', [
+        $test_list_id = $api->post('/lists', [
           'name' => self::MC_TEST_LIST_NAME,
           'contact' => $contact,
           'permission_reminder' => 'This is sent to test email accounts only.',
@@ -48,11 +64,68 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
             'language' => 'en',
             ],
           'email_type_option' => FALSE,
-        ])->data;
+        ])->data->id;
       }
 
       // Store this for our fixture.
       static::$test_list_id = $test_list_id;
+
+      // Ensure the list has the interest category we need.
+      $categories = $api->get("/lists/$test_list_id/interest-categories",
+            ['fields' => 'categories.id,categories.title','count'=>10000])
+          ->data->categories;
+      $category_id = NULL;
+      foreach ($categories as $category) {
+        if ($category->title == static::MC_INTEREST_CATEGORY_TITLE) {
+          $category_id = $category->id;
+        }
+      }
+      if ($category_id === NULL) {
+        // Create it.
+        $category_id = $api->post("/lists/$test_list_id/interest-categories", [
+          'title' => static::MC_INTEREST_CATEGORY_TITLE,
+          'type' => 'hidden',
+        ])->data->id;
+      }
+
+      // Ensure the interest category has the interests we need.
+      $interests = $api->get("/lists/$test_list_id/interest-categories/$category_id/interests",
+            ['fields' => 'interests.id,interests.name','count'=>10000])
+          ->data->interests;
+      $interest_id = NULL;
+      foreach ($interests as $interest) {
+        if ($interest->name == static::MC_INTEREST_NAME) {
+          $interest_id = $interest->id;
+        }
+      }
+      if ($interest_id === NULL) {
+        // Create it.
+        // Note: as of 9 May 2016, Mailchimp do not advertise this method and
+        // while it works, it throws an error. They confirmed this behaviour in
+        // a live chat session and said their devs would look into it, so may
+        // have been fixed.
+        try {
+          $interest_id = $api->post("/lists/$test_list_id/interest-categories/$category_id/interests", [
+            'name' => static::MC_INTEREST_NAME,
+          ])->data->id;
+        }
+        catch (CRM_Mailchimp_NetworkErrorException $e) {
+          // As per comment above, this may still have worked. Repeat the
+          // lookup.
+          //
+          $interests = $api->get("/lists/$test_list_id/interest-categories/$category_id/interests",
+                ['fields' => 'interests.id,interests.name','count'=>10000])
+              ->data->interests;
+          foreach ($interests as $interest) {
+            if ($interest->name == static::MC_INTEREST_NAME) {
+              $interest_id = $interest->id;
+            }
+          }
+          if (empty($interest_id)) {
+            throw new CRM_Mailchimp_NetworkErrorException($api, "Creating the interest failed, and while this is a known bug, it actually did not create the interest, either. ");
+          }
+        }
+      }
     }
     catch (CRM_Mailchimp_Exception $e) {
       // Spit out request and response for debugging.
@@ -63,11 +136,56 @@ class MailchimpApiIntegrationTest extends \PHPUnit_Framework_TestCase {
       // re-throw exception.
       throw $e;
     }
+
+    //
+    // Now set up the CiviCRM fixtures.
+    //
+
+    // Need to know field Ids for mailchimp fields.
+    $result = civicrm_api3('CustomField', 'get', ['label' => array('LIKE' => "%mailchimp%")]);
+    $custom_ids = [];
+    foreach ($result['values'] as $custom_field) {
+      $custom_ids[$custom_field['name']] = "custom_" . $custom_field['id'];
+    }
+    // Ensure we have the fields we later rely on.
+    foreach (['Mailchimp_Group', 'Mailchimp_Grouping', 'Mailchimp_List', 'is_mc_update_grouping'] as $_) {
+      if (empty($custom_ids[$_])) {
+        throw new Exception("Expected to find the Custom Field with name $_");
+      }
+    }
+
+    // Next create mapping groups in CiviCRM?
+    $result = civicrm_api3('Group', 'get', ['name' => static::C_TEST_MEMBERSHIP_GROUP_NAME, 'sequential' => 1]);
+    if ($result['count'] == 0) {
+      // Didn't exist, create it now.
+      $result = civicrm_api3('Group', 'create', [
+        'sequential' => 1,
+        'name' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
+        'title' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
+      ]);
+    }
+    static::$civicrm_group_id_membership = $result['values'][0]['id'];
+
+    // Ensure this group is set to be the membership group.
+    $result = civicrm_api3('Group', 'create', array(
+      'id' => static::$civicrm_group_id_membership,
+      $custom_ids['Mailchimp_List'] => static::$test_list_id,
+      $custom_ids['is_mc_update_grouping'] => 0,
+      $custom_ids['Mailchimp_Grouping'] => NULL,
+      $custom_ids['Mailchimp_Group'] => NULL,
+    ));
+
+
+    // Now create test contact 1
+    
+
+
   }
   /**
    * Remove the test list, if one was successfully set up.
    */
   public static function tearDownAfterClass() {
+    return;
     if (empty(static::$api_contactable->http_code)
       || static::$api_contactable->http_code != 200
       || empty(static::$test_list_id)
