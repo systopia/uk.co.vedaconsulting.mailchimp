@@ -238,10 +238,20 @@ class CRM_Mailchimp_Utils {
     if (!array_key_exists($listID, $mapper)) {
       $mapper[$listID] = array();
 
-      $categories = CRM_Mailchimp_Utils::getMailchimpApi()
-        ->get("/lists/$listID/interest-categories",
-          ['fields' => 'categories.id,categories.title','count'=>10000])
-        ->data->categories;
+      try {
+        $categories = CRM_Mailchimp_Utils::getMailchimpApi()
+          ->get("/lists/$listID/interest-categories",
+            ['fields' => 'categories.id,categories.title','count'=>10000])
+          ->data->categories;
+      }
+      catch (CRM_Mailchimp_RequestErrorException $e) {
+        CRM_Core_Error::debug_log_message('Mailchimp error: List $listID is not found.');
+        return NULL;
+      }
+      catch (CRM_Mailchimp_NetworkErrorException $e) {
+        CRM_Core_Error::debug_log_message('Mailchimp network error.');
+        return NULL;
+      }
       // Re-map $categories from this:
       //    id = (string [10]) `f192c59e0d`
       //    title = (string [7]) `CiviCRM`
