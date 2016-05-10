@@ -1,5 +1,13 @@
 <?php
 /**
+ * @file
+ * These tests run with a mocked Mailchimp API.
+ *
+ * They test that expected calls are made (or not made) based on changes in
+ * CiviCRM.
+ *
+ */
+/**
  * This tests CiviCRM using mocked Mailchimp API responses.
  *
  * It does not depend on a live Mailchimp account. However it is not a unit test
@@ -13,6 +21,8 @@
  */
 require 'integration-test-bootstrap.php';
 
+use \Prophecy\Argument;
+
 class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
   const MC_TEST_LIST_NAME = 'Mailchimp-CiviCRM Integration Test List';
   const MC_INTEREST_CATEGORY_TITLE = 'Test Interest Category';
@@ -21,7 +31,7 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
   const C_TEST_INTEREST_GROUP_NAME = 'mailchimp_integration_test_2';
   protected static $api_contactable;
   /** string holds the Mailchimp Id for our test list. */
-  protected static $test_list_id;
+  protected static $test_list_id = 'dummylistid';
   /** string holds the Mailchimp Id for test interest category. */
   protected static $test_interest_category_id;
   /** string holds the Mailchimp Id for test interest. */
@@ -49,121 +59,6 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
    * Connect to API and create test fixture lists.
    */
   public static function setUpBeforeClass() {
-    try {
-      // Use mock api.
-      CRM_Mailchimp_Utils::setMailchimpApi(new CRM_Mailchimp_Api3Stub(['api_key' => 'aaabbbcccdddeee-uk']));
-
-      $api = CRM_Mailchimp_Utils::getMailchimpApi();
-      $api->addMockResponse(['result' => '{"account_name":"mock account","email":"mock@example.com","contact":{"company":"mock Co.","addr1":"12 somewhere","addr2":"","city":"","state":"","zip":"","country":"GB"}}']);
-      $result = $api->get('/');
-      static::$api_contactable = $result;
-
-      // Ensure we have a test list.
-      $test_list_id = NULL;
-      $api->addMockResponse(['result' => '{"lists":[{"id":"aabbccddee","name":"' . self::MC_TEST_LIST_NAME . '"}]}']);
-      $lists = $api->get('/lists', ['count' => 10000, 'fields' => 'lists.name,lists.id'])->data->lists;
-      foreach ($lists as $list) {
-        if ($list->name == self::MC_TEST_LIST_NAME) {
-          $test_list_id = $list->id;
-          break;
-        }
-      }
-
-      if (empty($test_list_id)) {
-        // Test list does not exist, create it now.
-
-        // Annoyingly Mailchimp uses addr1 in a GET / response and address1 for
-        // a POST /lists request!
-        $contact = (array) static::$api_contactable->data->contact;
-        $contact['address1'] = $contact['addr1'];
-        $contact['address2'] = $contact['addr2'];
-        unset($contact['addr1'], $contact['addr2']);
-
-        $test_list_id = $api->post('/lists', [
-          'name' => self::MC_TEST_LIST_NAME,
-          'contact' => $contact,
-          'permission_reminder' => 'This is sent to test email accounts only.',
-          'campaign_defaults' => [
-            'from_name' => 'Automated Test Script',
-            'from_email' => static::$api_contactable->data->email,
-            'subject' => 'Automated Test',
-            'language' => 'en',
-            ],
-          'email_type_option' => FALSE,
-        ])->data->id;
-      }
-
-      // Store this for our fixture.
-      static::$test_list_id = $test_list_id;
-
-      // Ensure the list has the interest category we need.
-      $api->addMockResponse(['result' => '{"categories":[{"id":"categoryid","title":"' . self::MC_INTEREST_CATEGORY_TITLE . '"}]}']);
-      $categories = $api->get("/lists/$test_list_id/interest-categories",
-            ['fields' => 'categories.id,categories.title','count'=>10000])
-          ->data->categories;
-      $category_id = NULL;
-      foreach ($categories as $category) {
-        if ($category->title == static::MC_INTEREST_CATEGORY_TITLE) {
-          $category_id = $category->id;
-        }
-      }
-      if ($category_id === NULL) {
-        // Create it.
-        $category_id = $api->post("/lists/$test_list_id/interest-categories", [
-          'title' => static::MC_INTEREST_CATEGORY_TITLE,
-          'type' => 'hidden',
-        ])->data->id;
-      }
-
-      // Ensure the interest category has the interests we need.
-      $api->addMockResponse(['result' => '{"interests":[{"id":"interestid","name":"' . self::MC_INTEREST_NAME . '"}]}']);
-      $interests = $api->get("/lists/$test_list_id/interest-categories/$category_id/interests",
-            ['fields' => 'interests.id,interests.name','count'=>10000])
-          ->data->interests;
-      $interest_id = NULL;
-      foreach ($interests as $interest) {
-        if ($interest->name == static::MC_INTEREST_NAME) {
-          $interest_id = $interest->id;
-        }
-      }
-      if ($interest_id === NULL) {
-        // Create it.
-        // Note: as of 9 May 2016, Mailchimp do not advertise this method and
-        // while it works, it throws an error. They confirmed this behaviour in
-        // a live chat session and said their devs would look into it, so may
-        // have been fixed.
-        try {
-          $interest_id = $api->post("/lists/$test_list_id/interest-categories/$category_id/interests", [
-            'name' => static::MC_INTEREST_NAME,
-          ])->data->id;
-        }
-        catch (CRM_Mailchimp_NetworkErrorException $e) {
-          // As per comment above, this may still have worked. Repeat the
-          // lookup.
-          //
-          $interests = $api->get("/lists/$test_list_id/interest-categories/$category_id/interests",
-                ['fields' => 'interests.id,interests.name','count'=>10000])
-              ->data->interests;
-          foreach ($interests as $interest) {
-            if ($interest->name == static::MC_INTEREST_NAME) {
-              $interest_id = $interest->id;
-            }
-          }
-          if (empty($interest_id)) {
-            throw new CRM_Mailchimp_NetworkErrorException($api, "Creating the interest failed, and while this is a known bug, it actually did not create the interest, either. ");
-          }
-        }
-      }
-    }
-    catch (CRM_Mailchimp_Exception $e) {
-      // Spit out request and response for debugging.
-      print "Request:\n";
-      print_r($e->request);
-      print "Response:\n";
-      print_r($e->response);
-      // re-throw exception.
-      throw $e;
-    }
 
     //
     // Now set up the CiviCRM fixtures.
@@ -230,7 +125,6 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
    * Remove the test list, if one was successfully set up.
    */
   public static function tearDownAfterClass() {
-    return;
     // CiviCRM teardown.
     if (!empty(static::$civicrm_contact_1['contact_id'])) {
       print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
@@ -242,88 +136,59 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
         ]);
       }
     }
+  }
 
-    // Mailchimp tear-down:
-    if (empty(static::$api_contactable->http_code)
-      || static::$api_contactable->http_code != 200
-      || empty(static::$test_list_id)
-      || !is_string(static::$test_list_id)) {
+  /**
+   * Checks the right calls are made by the getMCInterestGroupings.
+   *
+   */
+  public function testGetMCInterestGroupings() {
 
-      // Nothing to do.
-      return;
-    }
+    // Get Mock API.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
 
-    try {
+    // Creating a sync object will cause a load of interests for that list from
+    // Mailchimp, so we prepare the mock for that.
+    $api_prophecy->get("/lists/dummylistid/interest-categories", Argument::any())
+      ->shouldBeCalled()
+      ->willReturn(json_decode('{"http_code":200,"data":{"categories":[{"id":"categoryid","title":"'. self::MC_INTEREST_CATEGORY_TITLE . '"}]}}'));
 
-      // Delete is a bit of a one-way thing so we really test that it's the
-      // right thing to do.
+    $api_prophecy->get("/lists/dummylistid/interest-categories/categoryid/interests", Argument::any())
+      ->shouldBeCalled()
+      ->willReturn(json_decode('{"http_code":200,"data":{"interests":[{"id":"interestid","name":"' . self::MC_INTEREST_NAME . '"}]}}'));
 
-      // Check that the list exists, is named as we expect and only has max 2
-      // contacts.
-      $api = CRM_Mailchimp_Utils::getMailchimpApi();
-      $test_list_id = static::$test_list_id;
-      $api->addMockResponse(['result' => '{"id":"'.$test_list_id.'","name":"'.static::MC_TEST_LIST_NAME.'","stats":{"member_count":1}}']);
-      $result = $api->get("/lists/$test_list_id", ['fields' => 'id,name,stats.member_count']);
-      if ($result->http_code != 200) {
-        throw new CRM_Mailchimp_RequestErrorException($api, "Trying to delete test list $test_list_id but getting list details failed. ");
-      }
-      if ($result->data->id != $test_list_id) {
-        // OK this is paranoia.
-        throw new CRM_Mailchimp_RequestErrorException($api, "Trying to delete test list $test_list_id but getting list returned different list?! ");
-      }
-      if ($result->data->name != static::MC_TEST_LIST_NAME) {
-        // OK this is paranoia.
-        throw new CRM_Mailchimp_RequestErrorException($api, "Trying to delete test list $test_list_id but the name was not as expected, so not deleted. ");
-      }
-      if ($result->data->stats->member_count > 2) {
-        // OK this is paranoia.
-        throw new CRM_Mailchimp_RequestErrorException($api, "Trying to delete test list $test_list_id but it has more than 2 members, so not deleted. ");
-      }
-
-      // OK, the test list exists, has the right name and only has two members:
-      // delete it.
-      $api->addMockResponse(['curl_info'=>['http_code'=>204]]);
-      $result = $api->delete("/lists/$test_list_id");
-      if ($result->http_code != 204) {
-        throw new CRM_Mailchimp_RequestErrorException($api, "Trying to delete test list $test_list_id but delete method did not return 204 as http response. ");
-      }
-
-    }
-    catch (CRM_Mailchimp_Exception $e) {
-      print "*** Exception!***\n" . $e->getMessage() . "\n";
-      // Spit out request and response for debugging.
-      print "Request:\n";
-      print_r($e->request);
-      print "Response:\n";
-      print_r($e->response);
-      // re-throw exception for usual stack trace etc.
-      throw $e;
-    }
+    CRM_Mailchimp_Utils::getMCInterestGroupings('dummylistid');
   }
   /**
-   * This is run before every test method.
+   * Check the right calls are made to the Mailchimp API.
+   *
+   * @depends testGetMCInterestGroupings
    */
-  public function assertPreConditions() {
-    $this->assertEquals(200, static::$api_contactable->http_code);
-    $this->assertTrue(!empty(static::$api_contactable->data->account_name), "Expected account_name to be returned.");
-    $this->assertTrue(!empty(static::$api_contactable->data->email), "Expected email belonging to the account to be returned.");
-
-    $this->assertNotEmpty(static::$test_list_id);
-    $this->assertInternalType('string', static::$test_list_id);
-    $this->assertGreaterThan(0, static::$civicrm_contact_1['contact_id']);
-  }
   public function testPostHookSubscribesWhenAddedToMembershipGroup() {
-    $api = CRM_Mailchimp_Utils::getMailchimpApi();
-    $api->addMockResponse(['result' => '{"categories":[{"id":"categoryid","title":"' . self::MC_INTEREST_CATEGORY_TITLE . '"}]}']);
-    $api->addMockResponse(['result' => '{"interests":[{"id":"interestid","name":"' . self::MC_INTEREST_NAME . '"}]}']);
-    //CRM_Mailchimp_Utils::setMailchimpApi(new CRM_Mailchimp_Api3Stub());
-    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+
+    // Get Mock API.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+
+    // Prepare some vars used in testing.
+    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
+    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
+      . '@' . $domain;
+    $subscriber_hash = md5(strtolower($email));
+
+    //
+    // Test:
+    //
     // If someone is added to the CiviCRM group, then we should expect them to
     // get subscribed.
 
-    $api->addMockResponse();
-    // Prepare the mock for the syncSingleContact - there should be one call to
-    // the API and it just needs to return success.
+    // Prepare the mock for the syncSingleContact
+    // We expect that a PUT request is sent to Mailchimp.
+    $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash",
+      Argument::that(function($_){ return $_['status'] == 'subscribed'; }))
+      ->shouldBeCalled();
+
     $result = civicrm_api3('GroupContact', 'create', [
       'sequential' => 1,
       'group_id' => static::$civicrm_group_id_membership,
@@ -331,176 +196,60 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
       'status' => "Added",
     ]);
 
-    // Now test if that person is subscribed at MC.
-    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
-    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
-      . '@' . $domain;
-    $subscriber_hash = md5(strtolower($email));
 
-    try {
-      $api->addMockResponse(['result' => '{"status":"subscribed"}']);
-      $result = $api->get("/lists/" . static::$test_list_id . "/members/$subscriber_hash", ['fields' => 'status']);
-    }
-    catch (CRM_Mailchimp_RequestErrorException $e) {
-      if ($e->response->http_code == 404) {
-        // Not subscribed.
-        $this->fail("Expected contact to be in the list at Mailchimp, but MC said resource not found; i.e. not subscribed.");
-      }
-      throw $e;
-    }
-    $this->assertEquals('subscribed', $result->data->status);
+    //
+    // Test:
+    //
+    // If someone is removed or deleted from the CiviCRM group they should get
+    // removed from Mailchimp.
 
-    // Prepare the mock for the syncSingleContact - there should be one call to
-    // the API and it just needs to return success.
-    $api->addMockResponse();
-    // Now remove them from the group.
+    // Prepare the mock for the syncSingleContact - this should get called
+    // twice.
+    $api_prophecy->patch("/lists/dummylistid/members/$subscriber_hash", ['status' => 'unsubscribed'])
+      ->shouldbecalledTimes(2);
+
     $result = civicrm_api3('GroupContact', 'create', [
       'sequential' => 1,
       'group_id' => static::$civicrm_group_id_membership,
       'contact_id' => static::$civicrm_contact_1['contact_id'],
       'status' => "Removed",
     ]);
-    try {
-      $api->addMockResponse(['result' => '{"status":"unsubscribed"}']);
-      $result = $api->get("/lists/" . static::$test_list_id . "/members/$subscriber_hash", ['fields' => 'status']);
-    }
-    catch (CRM_Mailchimp_RequestErrorException $e) {
-      if ($e->response->http_code == 404) {
-        // Not subscribed.
-        $this->fail("Expected contact to be in the list at Mailchimp, in an unsubscribed state but Mailchimp said not a member.");
-      }
-      throw $e;
-    }
-    $this->assertEquals('unsubscribed', $result->data->status);
 
-    // @todo what if the record was deleted. there would be no remove - so my
-    // optimization does not work :-(
-
-  }
-  /**
-   * Test the post hooks.
-   */
-  public function xtestPostHooks() {
-    // Disable Mailchimp API for testing.
-
-    $result = civicrm_api3('GroupContact', 'create', array(
+    //
+    // Test:
+    //
+    // If someone is deleted from the CiviCRM group they should get removed from
+    // Mailchimp.
+    $result = civicrm_api3('GroupContact', 'create', [
       'sequential' => 1,
-      'group_id' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
+      'group_id' => static::$civicrm_group_id_membership,
       'contact_id' => static::$civicrm_contact_1['contact_id'],
-      'status' => "Added",
-    ));
-
-    // Now sync this list.
-    // We do this without CiviCRM's batch process.
-    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
-
-    // Collect data from Mailchimp.
-    // There shouldn't be any members in this list yet.
-    $sync->collectMailchimp();
-    $this->assertEquals(0, $sync->countMailchimpMembers());
-
-    // Collect data from CiviCRM.
-    // There should be one member.
-    $sync->collectCiviCrm();
-    $this->assertEquals(1, $sync->countCiviCrmMembers());
-
-      //array('CRM_Mailchimp_Form_Sync', 'syncPushRemove'),
-      //array('CRM_Mailchimp_Form_Sync', 'syncPushAdd'),
+      'status' => "Removed",
+    ]);
 
 
   }
   /**
-   * Test that we can add someone to the Mailchimp list by
-   * adding them to the sync'ed group in CiviCRM.
-   */
-  public function xtestNewGroupMembersBecomeSubscribed() {
-    $result = civicrm_api3('GroupContact', 'create', array(
-      'sequential' => 1,
-      'group_id' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
-      'contact_id' => static::$civicrm_contact_1['contact_id'],
-      'status' => "Added",
-    ));
-
-    // Now sync this list.
-    // We do this without CiviCRM's batch process.
-    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
-
-    // Collect data from Mailchimp.
-    // There shouldn't be any members in this list yet.
-    $sync->collectMailchimp();
-    $this->assertEquals(0, $sync->countMailchimpMembers());
-
-    // Collect data from CiviCRM.
-    // There should be one member.
-    $sync->collectCiviCrm();
-    $this->assertEquals(1, $sync->countCiviCrmMembers());
-
-      //array('CRM_Mailchimp_Form_Sync', 'syncPushRemove'),
-      //array('CRM_Mailchimp_Form_Sync', 'syncPushAdd'),
-
-
-  }
-  /**
-   * Test that we can connect to the API and retrieve lists.
-   */
-  public function xtestLists() {
-    $api = CRM_Mailchimp_Utils::getMailchimpApi();
-
-    // Check we can access lists, that there is at least one list.
-    $result = $api->get('/lists');
-    $this->assertEquals(200, $result->http_code);
-    $this->assertTrue(isset($result->data->lists));
-    $this->assertInternalType('array', $result->data->lists);
-    $this->assertGreaterThanOrEqual(1, count($result->data->lists));
-
-
-    // Load webhooks for first list found.
-    $this->assertFalse(empty($result->data->lists[0]->id));
-    $list_id = $result->data->lists[0]->id;
-    $result = $api->get("/lists/$list_id/webhooks");
-    $this->assertEquals(200, $result->http_code);
-    $this->assertTrue(isset($result->data->webhooks));
-    $this->assertInternalType('array', $result->data->webhooks);
-  }
-  /**
-   * Check that requesting something that's no there throws the right exception
+   * Checks that multiple updates do not trigger syncs.
    *
-   * @expectedException CRM_Mailchimp_RequestErrorException
+   * We run the testGetMCInterestGroupings first as it caches data this depends
+   * on.
+   * @depends testGetMCInterestGroupings
    */
-  public function xtest404() {
-    CRM_Mailchimp_Utils::getMailchimpApi()->get('/lists/thisisnotavalidlisthash');
-  }
-  /**
-   * Test that we can get members' details, like the old export API.
-   */
-  public function xtestExport() {
-    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+  public function testPostHookDoesNotRunForBulkUpdates() {
 
-    // Assumes there is at least one list with at least 10 people on it.
-    $result = $api->get('/lists');
-    $list_id = $result->data->lists[0]->id;
-    $result = $api->get("/lists/$list_id/members?count=5");
-    $this->assertEquals(200, $result->http_code);
-    $this->assertEquals(5, count($result->data->members));
-  }
-  /**
-   * Test CiviCRM API function to get mailchimp lists.
-   */
-  public function xtestCiviCrmApiGetLists() {
-    $params = [];
-    $lists = civicrm_api3('Mailchimp', 'getlists', $params);
-    $a=1;
-  }
-  /**
-   * Test syncCollectMailchimp WIP.
-   */
-  public function xtestSCM() {
-    $list_id = 'dea38e8063';
-    //$api = CRM_Mailchimp_Utils::getMailchimpApi();
-    //$response = $api->get("/lists/$list_id/members", ['count' => 50]);
-    //$mapped_groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), $list_id);
-    CRM_Mailchimp_Form_Sync::syncCollectMailchimp($list_id);
-    //$api = CRM_Mailchimp_Utils::getMailchimpApi(); $data = $api->get("/lists", ['fields'=>'lists.id,lists.name'])->data;
-    $a=1;
+    // Get Mock API.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+
+    $api_prophecy->put()->shouldNotBeCalled();
+    $api_prophecy->patch()->shouldNotBeCalled();
+    $api_prophecy->get()->shouldNotBeCalled();
+    $api_prophecy->post()->shouldNotBeCalled();
+    $api_prophecy->delete()->shouldNotBeCalled();
+
+    // Array of ContactIds - provide 2.
+    $objectRef = [static::$civicrm_contact_1['contact_id'], 1];
+    mailchimp_civicrm_post('create', 'GroupContact', $objectId=static::$civicrm_group_id_membership, $objectRef );
   }
 }
