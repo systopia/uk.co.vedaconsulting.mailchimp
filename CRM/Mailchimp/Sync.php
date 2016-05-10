@@ -254,6 +254,59 @@ class CRM_Mailchimp_Sync {
   }
 
   /**
+   * Subscribes the contents of the tmp_mailchimp_push_c table.
+   */
+  public function addFromCiviCrm() {
+
+    $operations = [];
+    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_c;");
+    $url_prefix = "/lists/$this->list_id/members/";
+    while ($dao->fetch()) {
+
+      // Gather interests. @todo
+      $op = [
+        'PUT',
+        $url_prefix . md5(strtolower($dao->email)),
+        [
+          'status' => 'subscribed',
+          'email_address' => $dao->email,
+          //'interests' => [],
+          'merge_fields' => [
+            'FNAME' => $dao->first_name,
+            'LNAME' => $dao->last_name,
+          ],
+        ]
+      ];
+
+      $operations []= $op;
+    }
+
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $result = $api->batchAndWait($operations);
+    // @todo xxx
+    print "Batch results: " . $result->data->response_body_url . "\n";
+  }
+
+  /**
+   * Get list of emails to unsubscribe.
+   *
+   * @return array
+   */
+  public function getEmailsNotInCiviButInMailchimp() {
+    $dao = CRM_Core_DAO::executeQuery(
+      "SELECT m.email
+       FROM tmp_mailchimp_push_m m
+       WHERE NOT EXISTS (
+         SELECT email FROM tmp_mailchimp_push_c c WHERE c.email = m.email
+       );");
+
+    $emails = [];
+    while ($dao->fetch()) {
+      $batch[] = $dao->email;
+    }
+    return $emails;
+  }
+  /**
    * Return a count of the members on Mailchimp from the tmp_mailchimp_push_m
    * table.
    */
@@ -278,7 +331,6 @@ class CRM_Mailchimp_Sync {
    * details in CiviCRM.
    */
   public function syncSingleContact($contact_id) {
-    $a=1;
 
     // Get all the groups related to this list that the contact is currently in.
     // We have to use this dodgy API that concatenates the titles of the groups

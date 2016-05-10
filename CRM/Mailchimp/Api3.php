@@ -48,6 +48,9 @@ class CRM_Mailchimp_Api3 {
    *  accessed directly as a property of this object, too.
    */
   public $response;
+  /** for debugging */
+  static $request_id=0;
+  public static $log_to;
   /**
    * @param array $settings contains key 'api_key', possibly other settings.
    */
@@ -104,9 +107,53 @@ class CRM_Mailchimp_Api3 {
   }
 
   /**
+   * Perform a /batches POST request and sit and wait for the result.
+   */
+  public function batchAndWait(Array $batch) {
+    $batch_result = $this->makeBatchRequest($batch);
+
+    // This can take a long time...
+    set_time_limit(0);
+    do {
+      sleep(3);
+      $result = $this->get("/batches/{$batch_result->data->id}");
+      print $result->data->status . "\n";
+    } while ($result->data->status != 'finished');
+
+    // Now complete.
+    return $result;
+  }
+  /**
+   * Sends a batch request.
+   *
+   * @param array batch array of arrays which contain three values: the method,
+   * the path (e.g. /lists) and the data describing a set of requests.
+   */
+  public function makeBatchRequest(Array $batch) {
+    $ops = [];
+    foreach ($batch as $request) {
+      $op = ['method' => strtoupper($request[0]), 'path' => $request[1]];
+      if (substr($op['path'], 0, 1) != '/') {
+        throw new Exception("path $op[path] should begin with /");
+      }
+      if (!empty($request[2])) {
+        if ($op['method'] == 'GET') {
+          $op['params'] = $request[2];
+        }
+        else {
+          $op['body'] = json_encode($request[2]);
+        }
+      }
+      $ops []= $op;
+    }
+    $result = $this->post('/batches', ['operations' => $ops]);
+
+    return $result;
+  }
+  /**
    * Setter for $network_enabled.
    */
-  public function setNetworkEnable($enable=TRUE) {
+  public function setNetworkEnabled($enable=TRUE) {
     $this->network_enabled = (bool) $enable;
   }
   /**
@@ -129,6 +176,9 @@ class CRM_Mailchimp_Api3 {
       throw new InvalidArgumentException("Invalid URL - must begin with root /");
     }
     $this->request = (object) [
+      'id' => static::$request_id++,
+      'created' => date('Y-m-d H:i:s'),
+      'completed' => NULL,
       'method' => $method,
       'url' => $this->server . $url,
       'headers' => "Content-Type: Application/json;charset=UTF-8",
@@ -164,6 +214,7 @@ class CRM_Mailchimp_Api3 {
       'data' => null,
       ];
 
+    $this->logRequest();
     if ($this->network_enabled) {
       $this->sendRequest();
     }
@@ -190,6 +241,31 @@ class CRM_Mailchimp_Api3 {
     return $this->curlResultToResponse($info, $result);
   }
 
+  /**
+   * For debugging purposes.
+   *
+   * Does nothing without static::$log_to being set to a filename.
+   */
+  protected function logRequest() {
+    if (static::$log_to) {
+      $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "--> " . $this->request->method . " " . $this->request->url
+        . "\n\t" . json_encode($this->request) . "\n";
+      file_put_contents(static::$log_to, $msg, FILE_APPEND);
+    }
+  }
+  /**
+   * For debugging purposes.
+   *
+   * Does nothing without static::$log_to being set to a filename.
+   */
+  protected function logResponse() {
+    if (static::$log_to) {
+      $took = round((time() - strtotime($this->request->created))/60, 2);
+      $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "<-- Took {$took}s. Result: " . $this->response->http_code
+        . "\n\t" . json_encode($this->response) . "\n";
+      file_put_contents(static::$log_to, $msg, FILE_APPEND);
+    }
+  }
   /**
    * Prepares the response object from the result of a cURL call.
    *
@@ -223,13 +299,16 @@ class CRM_Mailchimp_Api3 {
     $json_returned = isset($info['content_type'])
       && preg_match('@^application/(problem\+)?json\b@i', $info['content_type']);
 
+
     if (!$json_returned) {
       // According to Mailchimp docs it may return non-JSON in event of a
       // timeout.
+      $this->logResponse();
       throw new CRM_Mailchimp_NetworkErrorException($this);
     }
 
     $this->response->data = $result ? json_decode($result) : null;
+    $this->logResponse();
 
     // Check for errors and throw appropriate CRM_Mailchimp_ExceptionBase.
     switch (substr((string) $this->response->http_code, 0, 1)) {

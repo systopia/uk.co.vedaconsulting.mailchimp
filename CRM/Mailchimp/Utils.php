@@ -277,9 +277,9 @@ class CRM_Mailchimp_Utils {
           ->data->categories;
       }
       catch (CRM_Mailchimp_RequestErrorException $e) {
-        if ($e->http_code == 404) {
+        if ($e->response->http_code == 404) {
           // Controlled response
-          CRM_Core_Error::debug_log_message('Mailchimp error: List $listID is not found.');
+          CRM_Core_Error::debug_log_message("Mailchimp error: List $listID is not found.");
           return NULL;
         }
         else {

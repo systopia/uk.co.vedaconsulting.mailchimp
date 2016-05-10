@@ -23,7 +23,7 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
     if (!isset($this->api)) {
       $this->api = new CRM_Mailchimp_Api3($settings);
       // We don't want our api actually talking to Mailchimp.
-      $this->api->setNetworkEnable(FALSE);
+      $this->api->setNetworkEnabled(FALSE);
     }
     return $this->api;
   }
