@@ -110,7 +110,7 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
       ]);
 
     if ($result['count'] == 0) {
-      print "Creating contact...\n";
+      //print "Creating contact...\n";
       // Create the contact.
       $result = civicrm_api3('Contact', 'create', ['sequential' => 1,
         'contact_type' => 'Individual',
@@ -127,7 +127,7 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
   public static function tearDownAfterClass() {
     // CiviCRM teardown.
     if (!empty(static::$civicrm_contact_1['contact_id'])) {
-      print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
+      //print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
       $contact_id = (int) static::$civicrm_contact_1['contact_id'];
       if ($contact_id>0) {
         $result = civicrm_api3('Contact', 'delete', [

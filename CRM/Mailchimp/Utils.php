@@ -59,7 +59,7 @@ class CRM_Mailchimp_Utils {
    *
    * This is for testing purposes only.
    */
-  static function setMailchimpApi(CRM_Mailchimp_ApiInterface $api) {
+  static function setMailchimpApi(CRM_Mailchimp_Api3 $api) {
     static::$mailchimp_api = $api;
   }
 

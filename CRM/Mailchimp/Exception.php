@@ -10,11 +10,11 @@ abstract class CRM_Mailchimp_Exception extends Exception {
 
   public $response;
 
-  public function __construct(CRM_Mailchimp_ApiInterface $api, $message_prefix='') {
-    $this->request = clone($api->request);
-    $this->response = clone($api->response);
-    
-    if ($this->response->data) {
+  public function __construct(CRM_Mailchimp_Api3 $api, $message_prefix='') {
+    $this->request = isset($api->request) ? clone($api->request) : NULL;
+    $this->response = isset($api->response) ? clone($api->response) : NULL;
+
+    if (isset($this->response->data->title)) {
       $message = $message_prefix . 'Mailchimp API said: ' . $this->response->data->title;
     }
     else {

@@ -3,9 +3,7 @@ $classes_root =  implode(DIRECTORY_SEPARATOR,[dirname(dirname(__DIR__)), 'CRM', 
 require $classes_root . 'Exception.php';
 require $classes_root . 'NetworkErrorException.php';
 require $classes_root . 'RequestErrorException.php';
-require $classes_root . 'ApiInterface.php';
-require $classes_root . 'ApiBase.php';
-require $classes_root . 'Api3Stub.php';
+require $classes_root . 'Api3.php';
 
 /**
  * Unit tests for Mailchimp API.
@@ -23,7 +21,9 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
       $settings = ['api_key' => $this->mock_api_key];
     }
     if (!isset($this->api)) {
-      $this->api = new CRM_Mailchimp_Api3Stub($settings);
+      $this->api = new CRM_Mailchimp_Api3($settings);
+      // We don't want our api actually talking to Mailchimp.
+      $this->api->setNetworkEnable(FALSE);
     }
     return $this->api;
   }
@@ -68,7 +68,7 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testGetApi() {
     $api = $this->getApi();
-    $this->assertInstanceOf('CRM_Mailchimp_ApiBase', $api);
+    $this->assertInstanceOf('CRM_Mailchimp_Api3', $api);
   }
 
 
@@ -86,7 +86,6 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testGetRequest() {
     $api = $this->getApi();
-    $api->addMockResponse();
     $response = $api->get('/foo');
     $request  = $api->request;
 
@@ -105,7 +104,6 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testGetRequestQs() {
     $api = $this->getApi();
-    $api->addMockResponse();
     $response = $api->get('/foo', ['name'=>'bar']);
     $request  = $api->request;
 
@@ -118,7 +116,6 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testGetRequestQsAppend() {
     $api = $this->getApi();
-    $api->addMockResponse();
     $response = $api->get('/foo?x=1', ['name'=>'bar']);
     $request  = $api->request;
 
@@ -134,9 +131,7 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testNotFoundException() {
     $api = $this->getApi();
-    $api->addMockResponseError(404, 'not found');
-    $response = $api->get('/foo');
-    $request  = $api->request;
+    $request  = $api->curlResultToResponse(['http_code'=>404,'content_type'=>'application/json'],'{"title":"not found"}');
   }
   /**
    * Check network exception.
@@ -146,9 +141,7 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
    */
   public function testNetworkError() {
     $api = $this->getApi();
-    $api->addMockResponseError(500, 'witty error ha ha so funny.');
-    $response = $api->get('/foo');
-    $request  = $api->request;
+    $request  = $api->curlResultToResponse(['http_code'=>500,'content_type'=>'application/json'],'{"title":"witty error ha ha so funny."}');
   }
 }
 
