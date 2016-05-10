@@ -4,22 +4,35 @@ require $classes_root . 'Utils.php';
 
 class UtilsTest extends \PHPUnit_Framework_TestCase {
 
-  public function testSplitGroupTitles() {
-    $group_details = [
-      1 => ['civigroup_title' => 'aye'],
-      3 => ['civigroup_title' => 'cee'],
-      4 => ['civigroup_title' => 'dee,eee'], // Title with comma.
-    ];
-    $cases = [
-      ['aye,bee',  [1]],
-      ['aye,bee,cee', [1,3]],
-      ['aye,bee,cee,dee', [1,3]],
-      ['aye,bee,cee,dee,eee', [1,3,4]],
-      ['', []],
+  /**
+   * Tests CRM_Mailchimp_Utils::splitGroupTitles.
+   */
+  public function testGroupTitleSplitting() {
+    $groups = [
+      1 => ['civigroup_title' => 'sponsored walk'],
+      2 => ['civigroup_title' => 'sponsored walk, 2015'],
+      3 => ['civigroup_title' => 'Never used'],
       ];
-    foreach ($cases as $case) {
-      $result = CRM_Mailchimp_Utils::splitGroupTitles($case[0], $group_details);
-      $this->assertEquals($case[1], $result);
+
+    $tests = [
+      // Basics:
+      'aye,sponsored walk' => [1],
+      'aye,sponsored walk,bee' => [1],
+      'sponsored walk,bee' => [1],
+      'sponsored walk,sponsored walk, 2015' => [1,2],
+      // Check that it's substring-safe - this should only match group 1
+      'sponsored walk' => [1],
+      // Check both work.
+      // This test checks the algorithm for looking for long group titles first.
+      // If we didn't do this then this test would return both groups, or the
+      // shorter group.
+      'sponsored walk, 2015' => [2],
+      ];
+    foreach ($tests as $input => $expected) {
+      $result = CRM_Mailchimp_Utils::splitGroupTitles($input, $groups);
+      sort($result);
+      $this->assertEquals($expected, $result, "Test case '$input' failed");
     }
   }
+
 }

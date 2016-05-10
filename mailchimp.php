@@ -493,6 +493,21 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
       return;
     }
 
+    if ($groups[$objectId]['interest_id']) {
+      // This is a change to an interest grouping.
+      // We only need update Mailchimp about this if the contact is in the
+      // membership group.
+      $list_id = $groups[$objectId]['list_id'];
+      // find membership group, then find out if the contact is in that group.
+      $membership_group_details = CRM_Mailchimp_Utils::getGroupsToSync(array(), $list_id, TRUE);
+      $result = civicrm_api3('Contact', 'getsingle', ['return'=>'group','contact_id'=>$objectRef[0]]);
+      if (!CRM_Mailchimp_Utils::splitGroupTitles($result['groups'], $membership_group_details)) {
+        // This contact is not in the membership group, so don't bother telling
+        // Mailchimp about a change in their interests.
+        return;
+      }
+    }
+
     // Trigger mini sync for this person and this list.
     $sync = new CRM_Mailchimp_Sync($groups[$objectId]['list_id']);
     $sync->syncSingleContact($objectRef[0]);

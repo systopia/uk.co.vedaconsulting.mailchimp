@@ -24,6 +24,10 @@ class CRM_Mailchimp_Sync {
    */
   protected $group_details;
   /**
+   * As above but without membership group.
+   */
+  protected $interest_group_details;
+  /**
    * The CiviCRM group id responsible for membership at Mailchimp.
    */
   protected $membership_group_id;
@@ -36,6 +40,9 @@ class CRM_Mailchimp_Sync {
         $this->membership_group_id = $group_id;
       }
     }
+    // Also cache without the membership group, i.e. interest groups only.
+    $this->interest_group_details = $this->group_details;
+    unset($this->interest_group_details[$this->membership_group_id]);
   }
   /**
    * Collect Mailchimp data into temporary working table.
@@ -49,13 +56,11 @@ class CRM_Mailchimp_Sync {
     CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
     CRM_Core_DAO::executeQuery(
       "CREATE TABLE tmp_mailchimp_push_m (
-        email VARCHAR(200),
-        first_name VARCHAR(100),
-        last_name VARCHAR(100),
-        euid VARCHAR(10),
-        leid VARCHAR(10),
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
         hash CHAR(32),
-        interests VARCHAR(4096),
+        interests VARCHAR(4096) NOT NULL,
         cid_guess INT(10),
         PRIMARY KEY (email, hash))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
@@ -99,28 +104,16 @@ class CRM_Mailchimp_Sync {
 
     //
     // Main loop of all the records.
-    //
-    // Make an array of interests that aren't the 'membership' interest.
-    // for use in the inside loop below.
-    $mapped_interests = array_filter($mapped_groups, function($details) {
-      return (bool) $details['category_id'];
-    });
-
     while ($members = $fetch_batch()) {
       foreach ($members as $member) {
+        $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : '';
+        $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : '';
         // Find out which of our mapped groups apply to this subscriber.
-        // Save to an array like: $interests[categoryid][interestid] = (bool)
-        $interests = array();
-        foreach ($mapped_interests as $civi_group_id => $details) {
-          $interests[$details['category_id']][$details['interest_id']] = $member->interests->{$details['interest_id']};
-        }
         // Serialize the grouping array for SQL storage - this is the fastest way.
-        $interests = serialize($interests);
+        $interests = serialize($this->getComparableInterestsFromMailchimp($member->interests));
 
         // we're ready to store this but we need a hash that contains all the info
         // for comparison with the hash created from the CiviCRM data (elsewhere).
-        $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : null;
-        $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : null;
         $hash = md5($member->email_address . $first_name . $last_name . $interests);
         // run insert prepared statement
         $db->execute($insert, [
@@ -152,11 +145,11 @@ class CRM_Mailchimp_Sync {
     $dao = CRM_Core_DAO::executeQuery("CREATE TABLE tmp_mailchimp_push_c (
         contact_id INT(10) UNSIGNED NOT NULL,
         email_id INT(10) UNSIGNED NOT NULL,
-        email VARCHAR(200),
-        first_name VARCHAR(100),
-        last_name VARCHAR(100),
-        hash CHAR(32),
-        groupings VARCHAR(4096),
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        hash CHAR(32) NOT NULL,
+        interests VARCHAR(4096) NOT NULL,
         PRIMARY KEY (email_id, email, hash))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
     // Cheekily access the database directly to obtain a prepared statement.
@@ -180,27 +173,19 @@ class CRM_Mailchimp_Sync {
 
     // First, get all subscribers from the membership group for this list.
     // ... Find CiviCRM group id for the membership group.
-    // ... And while we're at it, build an SQL-safe array of groupIds for groups mapped to groupings.
-    //     (we use that later)
+    // ... And while we're at it, build an SQL-safe array of groupIds for groups
+    //     mapped to groupings. (we use that later)
     $membership_group_id = FALSE;
     // There used to be a distinction between the handling of 'normal' groups
     // and smart groups. But now the API will take care of this.
     $grouping_group_ids = array();
-    $default_info = array();
-
-    // The CiviCRM Contact API returns group titles instead of group ID's.
-    // Nobody knows why. So let's build this array to convert titles to ID's.
-    $title2gid = array();
-
     foreach ($mapped_groups as $group_id => $details) {
-      $title2gid[$details['civigroup_title']] = $group_id;
       CRM_Contact_BAO_GroupContactCache::loadAll($group_id);
       if (!$details['category_id']) {
         $membership_group_id = $group_id;
       }
       else {
-        $grouping_group_ids[] = (int)$group_id;
-        $default_info[ $details['grouping_id'] ][ $details['group_id'] ] = FALSE;
+        $interest_group_ids[] = (int) $group_id;
       }
     }
     if (!$membership_group_id) {
@@ -223,19 +208,11 @@ class CRM_Mailchimp_Sync {
       'options' => array('limit' => 0),
     ));
 
+    // Loop contacts:
     foreach ($result['values'] as $contact) {
       // Find out the ID's of the groups the $contact belongs to, and
       // save in $info.
-      $info = $default_info;
-
-      $contact_group_titles = explode(',', $contact['groups'] );
-      foreach ($contact_group_titles as $title) {
-        $group_id = $title2gid[$title];
-        if (in_array($group_id, $grouping_group_ids)) {
-          $details = $mapped_groups[$group_id];
-          $info[$details['grouping_id']][$details['group_id']] = TRUE;
-        }
-      }
+      $info = $this->getComparableInterestsFromCiviCrmGroups($contact['groups']);
 
       // OK we should now have all the info we need.
       // Serialize the grouping array for SQL storage - this is the fastest way.
@@ -251,6 +228,46 @@ class CRM_Mailchimp_Sync {
 
     // Tidy up.
     $db->freePrepared($insert);
+  }
+  /**
+   * Convert a 'groups' string as provided by CiviCRM's API to a structured
+   * array of arrays whose keys are Mailchimp interest ids and whos value is
+   * boolean.
+   *
+   * Nb. this is then key-sorted, which results in a standardised array for
+   * comparison.
+   *
+   * @param string $groups as returned by CiviCRM's API.
+   * @return array of interest_ids to booleans.
+   */
+  public function getComparableInterestsFromCiviCrmGroups($groups) {
+    $civi_groups = CRM_Mailchimp_Utils::splitGroupTitles($groups, $this->interest_group_details);
+    foreach ($this->interest_group_details as $civi_group_id => $details) {
+      $info[$details['interest_id']] = in_array($civi_group_id, $civi_groups);
+    }
+    ksort($info);
+    return $info;
+  }
+
+  /**
+   * Convert interests object received from the Mailchimp API into
+   * a structure identical to that produced by
+   * getComparableInterestsFromCiviCrmGroups.
+   *
+   * Note this will only return information about interests mapped in CiviCRM.
+   * Any other interests that may have been created on Mailchimp are not
+   * included here.
+   *
+   * @param object $interests 'interests' as returned by GET
+   * /list/.../members/...?fields=interests
+   */
+  public function getComparableInterestsFromMailchimp($interests) {
+    $info = [];
+    foreach ($this->interest_group_details as $details) {
+      $info[$details['interest_id']] = !empty($interests->{$details['interest_id']});
+    }
+    ksort($info);
+    return $info;
   }
 
   /**
@@ -270,7 +287,7 @@ class CRM_Mailchimp_Sync {
         [
           'status' => 'subscribed',
           'email_address' => $dao->email,
-          //'interests' => [],
+          'interests' => unserialize($dao->interests),
           'merge_fields' => [
             'FNAME' => $dao->first_name,
             'LNAME' => $dao->last_name,
@@ -284,7 +301,7 @@ class CRM_Mailchimp_Sync {
     $api = CRM_Mailchimp_Utils::getMailchimpApi();
     $result = $api->batchAndWait($operations);
     // @todo xxx
-    print "Batch results: " . $result->data->response_body_url . "\n";
+    // print "Batch results: " . $result->data->response_body_url . "\n";
   }
 
   /**
@@ -377,13 +394,7 @@ class CRM_Mailchimp_Sync {
         ],
     ];
     // Do interest groups.
-    foreach ($this->group_details as $group_id => $group_details) {
-      if ($group_id == $this->membership_group_id) {
-        continue;
-      }
-      $data['interests'][$group_details['interest_id']] =
-        in_array($group_id, $in_groups) ? 1 : 0;
-    }
+    $data['interests'] = $this->getComparableInterestsFromCiviCrmGroups($contact['groups']);
     $result = $api->put("/lists/$this->list_id/members/$subscriber_hash", $data);
   }
 }

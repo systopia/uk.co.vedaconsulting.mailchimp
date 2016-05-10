@@ -50,7 +50,8 @@ class CRM_Mailchimp_Api3 {
   public $response;
   /** for debugging */
   static $request_id=0;
-  public static $log_to;
+  /** supply a filename to start logging of all API requests and responses.. */
+  public $log_to;
   /**
    * @param array $settings contains key 'api_key', possibly other settings.
    */
@@ -117,7 +118,6 @@ class CRM_Mailchimp_Api3 {
     do {
       sleep(3);
       $result = $this->get("/batches/{$batch_result->data->id}");
-      print $result->data->status . "\n";
     } while ($result->data->status != 'finished');
 
     // Now complete.
@@ -244,13 +244,13 @@ class CRM_Mailchimp_Api3 {
   /**
    * For debugging purposes.
    *
-   * Does nothing without static::$log_to being set to a filename.
+   * Does nothing without $log_to being set to a filename.
    */
   protected function logRequest() {
-    if (static::$log_to) {
+    if ($this->log_to) {
       $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "--> " . $this->request->method . " " . $this->request->url
         . "\n\t" . json_encode($this->request) . "\n";
-      file_put_contents(static::$log_to, $msg, FILE_APPEND);
+      file_put_contents($this->log_to, $msg, FILE_APPEND);
     }
   }
   /**
@@ -259,11 +259,11 @@ class CRM_Mailchimp_Api3 {
    * Does nothing without static::$log_to being set to a filename.
    */
   protected function logResponse() {
-    if (static::$log_to) {
+    if ($this->log_to) {
       $took = round((time() - strtotime($this->request->created))/60, 2);
       $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "<-- Took {$took}s. Result: " . $this->response->http_code
         . "\n\t" . json_encode($this->response) . "\n";
-      file_put_contents(static::$log_to, $msg, FILE_APPEND);
+      file_put_contents($this->log_to, $msg, FILE_APPEND);
     }
   }
   /**

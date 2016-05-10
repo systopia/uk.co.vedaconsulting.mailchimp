@@ -71,7 +71,6 @@ class MailchimpApiUnitTest extends \PHPUnit_Framework_TestCase {
     $this->assertInstanceOf('CRM_Mailchimp_Api3', $api);
   }
 
-
   /**
    * Check a request for a resource that does not start / fails.
    *

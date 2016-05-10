@@ -4,10 +4,7 @@ class CRM_Mailchimp_Utils {
 
   const MC_SETTING_GROUP = 'MailChimp Preferences';
 
-  // Which class will offer the Mailchimp API?
-  static $mailchimp_api_service = 'CRM_Mailchimp_Api3';
-
-  // Mailchimp API object to use.
+  /** Mailchimp API object to use. */
   static protected $mailchimp_api;
 
   /**
@@ -18,13 +15,41 @@ class CRM_Mailchimp_Utils {
    * a comma separated string. You can't split on a comma because there is no
    * restriction on commas in group titles. So instead we take a list of
    * candidate titles and look for those.
+   *
+   * This function solves the problem of:
+   * Group name: "Sponsored walk, 2015"
+   * Group name: "Sponsored walk"
+   *
+   * Contact 1's groups: "Sponsored walk,Sponsored walk, 2015"
+   * This contact is in both groups.
+   *
+   * Contact 2's groups: "Sponsored walk"
+   * This contact is only in the one group.
+   *
+   * If we just split on comma then the contacts would only be in the "sponsored
+   * walk" group and never the one with the comma in.
+   *
+   * @param string $group_titles As output by the CiviCRM api for a contact when
+   * you request the 'group' output (which comes in a key called 'groups').
+   * @param array $group_details As from CRM_Mailchimp_Utils::getGroupsToSync
+   * but only including groups you're interested in.
    */
   static function splitGroupTitles($group_titles, $group_details) {
     $groups = [];
+
+    // Sort the group titles by length, longest first.
+    uasort($group_details, function($a, $b) {
+      return (strlen($b['civigroup_title']) - strlen($a['civigroup_title']));
+    });
+    // Remove the found titles longest first.
     $group_titles = ",$group_titles,";
+
     foreach ($group_details as $civi_group_id => $detail) {
-      if (strpos($group_titles, ",$detail[civigroup_title],") !== FALSE) {
-        $groups []= $civi_group_id; 
+      $i = strpos($group_titles, ",$detail[civigroup_title],");
+      if ($i !== FALSE) {
+        $groups[] = $civi_group_id;
+        // Remove this from the string.
+        $group_titles = substr($group_titles, 0, $i+1) . substr($group_titles, $i + strlen(",$detail[civigroup_title],"));
       }
     }
     return $groups;
@@ -32,20 +57,16 @@ class CRM_Mailchimp_Utils {
   /**
    * Returns an API class for talking to Mailchimp.
    *
-   * This allows dependency injection, so test environments can deal with a
-   * non-live or mock API either through changing the default service provider
-   * in static::$mailchimp_api_service or through providing an API object with
-   * setMailchimpApi()
-   *
-   * Drupal 8 implementations could provide this as a service in future, but
-   * as CiviCRM needs to run on other platforms it's done this way.
+   * This is a singleton pattern with a factory method to create an object of
+   * the normal API class. You can set the Api object with
+   * CRM_Mailchimp_Utils::setMailchimpApi() which is essential for being able to
+   * passin mocks for testing.
    */
   static function getMailchimpApi() {
 
     // Singleton pattern.
     if (!isset(static::$mailchimp_api)) {
-      $class = static::$mailchimp_api_service;
-      $api = new $class([
+      $api = new CRM_Mailchimp_Api3([
           'api_key' => CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key')
           ]);
       static::setMailchimpApi($api);
@@ -128,8 +149,8 @@ class CRM_Mailchimp_Utils {
       WHERE $whereClause";
     $dao = CRM_Core_DAO::executeQuery($query, $params);
     while ($dao->fetch()) {
-      $interest_name = CRM_Mailchimp_Utils::getMCGroupName($dao->mc_list_id, $dao->mc_grouping_id, $dao->mc_group_id);
-      $category_name = CRM_Mailchimp_Utils::getMCGroupingName($dao->mc_list_id, $dao->mc_grouping_id);
+      $interest_name = CRM_Mailchimp_Utils::getMCInterestName($dao->mc_list_id, $dao->mc_grouping_id, $dao->mc_group_id);
+      $category_name = CRM_Mailchimp_Utils::getMCCategoryName($dao->mc_list_id, $dao->mc_grouping_id);
       $groups[$dao->entity_id] =
         array(
           'list_id'               => $dao->mc_list_id,
@@ -200,38 +221,37 @@ class CRM_Mailchimp_Utils {
    * return the group name for given list, grouping and group
    *
    */
-  static function getMCGroupName($listID, $groupingID, $groupID) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCGroupName $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCGroupName $groupingID', $groupingID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCGroupName $groupID', $groupID);
-
+  static function getMCInterestName($listID, $category_id, $interest_id) {
+    CRM_Mailchimp_Utils::checkDebug(__FUNCTION__ . " called for list $listID, category $category_id, interest $interest_id");
     $info = static::getMCInterestGroupings($listID);
 
     // Check list, grouping, and group exist
-    if (empty($info[$groupingID]['groups'][$groupID])) {
-      return NULL;
+    if (empty($info[$category_id]['interests'][$interest_id])) {
+      $name = null;
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCGroupName $info', $info[$groupingID]['groups'][$groupID]['name']);
-    
-    return $info[$groupingID]['groups'][$groupID]['name'];
+    else {
+      $name = $info[$category_id]['interests'][$interest_id]['name'];
+    }
+    CRM_Mailchimp_Utils::checkDebug('End-' . __FUNCTION__, $name);
+    return $name;
   }
 
   /**
    * Return the grouping name for given list, grouping MC Ids.
    */
-  static function getMCGroupingName($listID, $groupingID) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCGroupingName $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCGroupingName $groupingID', $groupingID);
+  static function getMCCategoryName($listID, $category_id) {
+    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $listID', $listID);
+    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $category_id', $category_id);
 
     $info = static::getMCInterestGroupings($listID);
 
     // Check list, grouping, and group exist
-    if (empty($info[$groupingID])) {
-      return NULL;
+    $name = NULL;
+    if (!empty($info[$category_id])) {
+      $name = $info[$category_id]['name'];
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCGroupingName $info ', $info[$groupingID]['name']);
-    
-    return $info[$groupingID]['name'];
+    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCCategoryName $name ', $name);
+    return $name;
   }
 
   /**
@@ -240,14 +260,12 @@ class CRM_Mailchimp_Utils {
    * Nb. general API function used by several other helper functions.
    *
    * Returns an array like {
-   *   [groupingId] => array(
-   *     'id' => [groupingId],
+   *   [category_id] => array(
+   *     'id' => [category_id],
    *     'name' => ...,
-   *     'form_field' => ...,    (not v interesting)
-   *     'display_order' => ..., (not v interesting)
-   *     'groups' => array(
-   *        [MC groupId] => array(
-   *          'id' => [MC groupId],
+   *     'interests' => array(
+   *        [interest_id] => array(
+   *          'id' => [interest_id],
    *          'bit' => ..., ?
    *          'name' => ...,
    *          'display_order' => ...,
@@ -302,17 +320,15 @@ class CRM_Mailchimp_Utils {
           ->get("/lists/$listID/interest-categories/$category->id/interests",
             ['fields' => 'interests.id,interests.name','count'=>10000])
           ->data->interests;
+
+        $mapper[$listID][$category->id] = [
+          'id' => $category->id,
+          'name' => $category->title,
+          'interests' => [],
+          ];
         foreach ($interests as $interest) {
-          $mapper[$listID][$category->id] = [
-            'id' => $category->id,
-            'name' => $category->title,
-            'interests' => [
-              $interest->id => [
-                  'id' => $interest->id,
-                  'name' => $interest->name,
-                ],
-              ],
-            ];
+          $mapper[$listID][$category->id]['interests'][$interest->id] =
+            ['id' => $interest->id, 'name' => $interest->name];
         }
       }
     }
@@ -833,7 +849,7 @@ class CRM_Mailchimp_Utils {
 		$group_id = $groupDetails['group_id'];
 		if (!empty($grouping_id) AND !empty($group_id)) {
 			$merge_groups[$grouping_id] = array('id'=> $groupDetails['grouping_id'], 'groups'=>array());
-			$merge_groups[$grouping_id]['groups'][] = CRM_Mailchimp_Utils::getMCGroupName($listID, $grouping_id, $group_id);
+			$merge_groups[$grouping_id]['groups'][] = CRM_Mailchimp_Utils::getMCInterestName($listID, $grouping_id, $group_id);
 			
 			// remove the significant array indexes, in case Mailchimp cares.
 			$merge['groupings'] = array_values($merge_groups);

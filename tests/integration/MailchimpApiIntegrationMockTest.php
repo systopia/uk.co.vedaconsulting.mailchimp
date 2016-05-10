@@ -23,124 +23,34 @@ require 'integration-test-bootstrap.php';
 
 use \Prophecy\Argument;
 
-class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
-  const MC_TEST_LIST_NAME = 'Mailchimp-CiviCRM Integration Test List';
-  const MC_INTEREST_CATEGORY_TITLE = 'Test Interest Category';
-  const MC_INTEREST_NAME = 'Orang-utans';
-  const C_TEST_MEMBERSHIP_GROUP_NAME = 'mailchimp_integration_test_1';
-  const C_TEST_INTEREST_GROUP_NAME = 'mailchimp_integration_test_2';
-  protected static $api_contactable;
-  /** string holds the Mailchimp Id for our test list. */
-  protected static $test_list_id = 'dummylistid';
-  /** string holds the Mailchimp Id for test interest category. */
-  protected static $test_interest_category_id;
-  /** string holds the Mailchimp Id for test interest. */
-  protected static $test_interest_id;
+class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
 
-  /** holds CiviCRM contact Id for test contact 1*/
-  protected static $test_cid1;
-  /** holds CiviCRM contact Id for test contact 2*/
-  protected static $test_cid2;
-  /** holds CiviCRM Group Id for membership group*/
-  protected static $civicrm_group_id_membership;
-  /** holds CiviCRM Group Id for interest group*/
-  protected static $civicrm_group_id_interest;
-
-  /**
-   * array Test contact 1
-   */
-  protected static $civicrm_contact_1 = [
-    'contact_id' => NULL,
-    'first_name' => 'Wilma',
-    'last_name' => 'Flintstone-Test-Record',
-    ];
-
-  /**
-   * Connect to API and create test fixture lists.
-   */
   public static function setUpBeforeClass() {
-
-    //
-    // Now set up the CiviCRM fixtures.
-    //
-
-    // Need to know field Ids for mailchimp fields.
-    $result = civicrm_api3('CustomField', 'get', ['label' => array('LIKE' => "%mailchimp%")]);
-    $custom_ids = [];
-    foreach ($result['values'] as $custom_field) {
-      $custom_ids[$custom_field['name']] = "custom_" . $custom_field['id'];
-    }
-    // Ensure we have the fields we later rely on.
-    foreach (['Mailchimp_Group', 'Mailchimp_Grouping', 'Mailchimp_List', 'is_mc_update_grouping'] as $_) {
-      if (empty($custom_ids[$_])) {
-        throw new Exception("Expected to find the Custom Field with name $_");
-      }
-    }
-
-    // Next create mapping groups in CiviCRM?
-    $result = civicrm_api3('Group', 'get', ['name' => static::C_TEST_MEMBERSHIP_GROUP_NAME, 'sequential' => 1]);
-    if ($result['count'] == 0) {
-      // Didn't exist, create it now.
-      $result = civicrm_api3('Group', 'create', [
-        'sequential' => 1,
-        'name' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
-        'title' => static::C_TEST_MEMBERSHIP_GROUP_NAME,
-      ]);
-    }
-    static::$civicrm_group_id_membership = (int) $result['values'][0]['id'];
-
-    // Ensure this group is set to be the membership group.
-    $result = civicrm_api3('Group', 'create', array(
-      'id' => static::$civicrm_group_id_membership,
-      $custom_ids['Mailchimp_List'] => static::$test_list_id,
-      $custom_ids['is_mc_update_grouping'] => 0,
-      $custom_ids['Mailchimp_Grouping'] => NULL,
-      $custom_ids['Mailchimp_Group'] => NULL,
-    ));
-
-
-    // Now create test contact 1
-    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
-    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
-      . '@' . $domain;
-    $result = civicrm_api3('Contact', 'get', ['sequential' => 1,
-      'first_name' => static::$civicrm_contact_1['first_name'],
-      'last_name'  => static::$civicrm_contact_1['last_name'],
-      'email'      => $email,
-      ]);
-
-    if ($result['count'] == 0) {
-      //print "Creating contact...\n";
-      // Create the contact.
-      $result = civicrm_api3('Contact', 'create', ['sequential' => 1,
-        'contact_type' => 'Individual',
-        'first_name' => static::$civicrm_contact_1['first_name'],
-        'last_name'  => static::$civicrm_contact_1['last_name'],
-        'email'      => $email,
-      ]);
-    }
-    static::$civicrm_contact_1['contact_id'] = (int) $result['values'][0]['id'];
+    static::createMailchimpMockFixtures();
+    static::createCiviCrmFixtures();
+  }
+  /**
+   * Set dummy fixtures.
+   */
+  public static function createMailchimpMockFixtures() {
+    static::$test_list_id = 'dummylistid';
+    static::$test_interest_category_id = 'categoryid';
+    static::$test_interest_id_1 = 'interestId1';
+    static::$test_interest_id_2 = 'interestId2';
   }
   /**
    * Remove the test list, if one was successfully set up.
    */
   public static function tearDownAfterClass() {
-    // CiviCRM teardown.
-    if (!empty(static::$civicrm_contact_1['contact_id'])) {
-      //print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
-      $contact_id = (int) static::$civicrm_contact_1['contact_id'];
-      if ($contact_id>0) {
-        $result = civicrm_api3('Contact', 'delete', [
-          'id' => $contact_id,
-          'skip_undelete' => 1,
-        ]);
-      }
-    }
+    static::tearDownCiviCrmFixtures();
   }
 
   /**
    * Checks the right calls are made by the getMCInterestGroupings.
    *
+   * This is a dependency of some other tests because it also caches the result,
+   * which means that we don't have to duplicate prophecies for this behaviour
+   * in other tests.
    */
   public function testGetMCInterestGroupings() {
 
@@ -156,26 +66,93 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
 
     $api_prophecy->get("/lists/dummylistid/interest-categories/categoryid/interests", Argument::any())
       ->shouldBeCalled()
-      ->willReturn(json_decode('{"http_code":200,"data":{"interests":[{"id":"interestid","name":"' . self::MC_INTEREST_NAME . '"}]}}'));
+      ->willReturn(json_decode('{"http_code":200,"data":{"interests":[{"id":"interestId1","name":"' . self::MC_INTEREST_NAME_1 . '"},{"id":"interestId2","name":"' . self::MC_INTEREST_NAME_2 . '"}]}}'));
 
-    CRM_Mailchimp_Utils::getMCInterestGroupings('dummylistid');
+    $interests = CRM_Mailchimp_Utils::getMCInterestGroupings('dummylistid');
+    $this->assertEquals([ 'categoryid' => [
+      'id' => 'categoryid',
+      'name' => self::MC_INTEREST_CATEGORY_TITLE,
+      'interests' => [
+        'interestId1' => [ 'id' => 'interestId1', 'name' => static::MC_INTEREST_NAME_1 ],
+        'interestId2' => [ 'id' => 'interestId2', 'name' => static::MC_INTEREST_NAME_2 ],
+      ],
+    ]], $interests);
+
+  }
+  /**
+   * Tests the mapping of CiviCRM group memberships to an array of Mailchimp
+   * interest Ids => Bool.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testGetComparableInterestsFromCiviCrmGroups() {
+
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+    $g = static::C_TEST_MEMBERSHIP_GROUP_NAME;
+    $i = static::C_TEST_INTEREST_GROUP_NAME_1;
+    $j = static::C_TEST_INTEREST_GROUP_NAME_2;
+    $cases = [
+      // In both membership and interest1
+      "$g,$i" => ['interestId1'=>TRUE,'interestId2'=>FALSE],
+      // Just in membership group.
+      "$g" => ['interestId1'=>FALSE,'interestId2'=>FALSE],
+      // In interest1 only.
+      "$i" => ['interestId1'=>TRUE,'interestId2'=>FALSE],
+      // In lots!
+      "$j,other list name,$g,$i,and another" => ['interestId1'=>TRUE,'interestId2'=>TRUE],
+      // In both and other non MC groups.
+      "other list name,$g,$i,and another" => ['interestId1'=>TRUE,'interestId2'=>FALSE],
+      // In none, just other non MC groups.
+      "other list name,and another" => ['interestId1'=> FALSE,'interestId2'=>FALSE],
+      // In no groups.
+      "" => ['interestId1'=> FALSE,'interestId2'=>FALSE],
+      ];
+    foreach ($cases as $input=>$expected) {
+      $ints = $sync->getComparableInterestsFromCiviCrmGroups($input);
+      $this->assertEquals($expected, $ints, "mapping failed for test '$input'");
+    }
+
+  }
+  /**
+   * Tests the mapping of CiviCRM group memberships to an array of Mailchimp
+   * interest Ids => Bool.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testGetComparableInterestsFromMailchimp() {
+
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+    $cases = [
+      // 'Normal' tests
+      [ (object) ['interestId1' => TRUE, 'interestId2'=>TRUE], ['interestId1'=>TRUE, 'interestId2'=>TRUE]],
+      [ (object) ['interestId1' => FALSE, 'interestId2'=>TRUE], ['interestId1'=>FALSE, 'interestId2'=>TRUE]],
+      // Test that if Mailchimp omits an interest grouping we've mapped it's
+      // considered false. This wil be the case if someone deletes an interest
+      // on Mailchimp but not the mapped group in Civi.
+      [ (object) ['interestId1' => TRUE], ['interestId1'=>TRUE, 'interestId2'=>FALSE]],
+      // Test that non-mapped interests are ignored.
+      [ (object) ['interestId1' => TRUE, 'foo' => TRUE], ['interestId1'=>TRUE, 'interestId2'=>FALSE]],
+      ];
+    foreach ($cases as $i=>$_) {
+      list($input, $expected) = $_;
+      $ints = $sync->getComparableInterestsFromMailchimp($input);
+      $this->assertEquals($expected, $ints, "mapping failed for test '$i'");
+    }
+
   }
   /**
    * Check the right calls are made to the Mailchimp API.
    *
    * @depends testGetMCInterestGroupings
    */
-  public function testPostHookSubscribesWhenAddedToMembershipGroup() {
+  public function testPostHookForMembershipListChanges() {
 
     // Get Mock API.
     $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
     CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
 
-    // Prepare some vars used in testing.
-    $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
-    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
-      . '@' . $domain;
-    $subscriber_hash = md5(strtolower($email));
+    // handy copy.
+    $subscriber_hash = static::$civicrm_contact_1['subscriber_hash'];
 
     //
     // Test:
@@ -186,7 +163,12 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
     // Prepare the mock for the syncSingleContact
     // We expect that a PUT request is sent to Mailchimp.
     $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash",
-      Argument::that(function($_){ return $_['status'] == 'subscribed'; }))
+      Argument::that(function($_){
+        return $_['status'] == 'subscribed'
+          && $_['interests']['interestId1'] === FALSE
+          && $_['interests']['interestId2'] === FALSE
+          && count($_['interests']) == 2;
+      }))
       ->shouldBeCalled();
 
     $result = civicrm_api3('GroupContact', 'create', [
@@ -220,13 +202,115 @@ class MailchimpApiIntegrationMockTest extends \PHPUnit_Framework_TestCase {
     //
     // If someone is deleted from the CiviCRM group they should get removed from
     // Mailchimp.
+    $result = civicrm_api3('GroupContact', 'delete', [
+      'group_id' => static::$civicrm_group_id_membership,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+    ]);
+
+
+  }
+  /**
+   * Check the right calls are made to the Mailchimp API as result of
+   * adding/removing/deleting someone from an group linked to an interest
+   * grouping.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testPostHookForInterestGroupChanges() {
+
+    // Get Mock API.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+
+    $subscriber_hash = static::$civicrm_contact_1['subscriber_hash'];
+
+    //
+    // Test:
+    //
+    // Because this person is NOT on the membership list, nothing we do to their
+    // interest group membership should result in a Mailchimp update.
+    //
+    // Prepare the mock for the syncSingleContact
+    $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash", Argument::any())->shouldNotBeCalled();
+
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Added",
+    ]);
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Removed",
+    ]);
+    $result = civicrm_api3('GroupContact', 'delete', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+    ]);
+
+    //
+    // Test:
+    //
+    // Add them to the membership group, then these interest changes sould
+    // result in an update.
+
+    // Create a new prophecy since we used the last one to assert something had
+    // not been called.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+
+    // Prepare the mock for the syncSingleContact
+    // We expect that a PUT request is sent to Mailchimp.
+    $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash",
+      Argument::that(function($_){
+        return $_['status'] == 'subscribed'
+          && $_['interests']['interestId1'] === FALSE
+          && $_['interests']['interestId2'] === FALSE
+          && count($_['interests']) == 2;
+      }))
+      ->shouldBeCalled();
+
     $result = civicrm_api3('GroupContact', 'create', [
       'sequential' => 1,
       'group_id' => static::$civicrm_group_id_membership,
       'contact_id' => static::$civicrm_contact_1['contact_id'],
-      'status' => "Removed",
+      'status' => "Added",
     ]);
 
+    // Use new prophecy
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash", Argument::any())->shouldBeCalledTimes(3);
+
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Added",
+    ]);
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'status' => "Removed",
+    ]);
+    $result = civicrm_api3('GroupContact', 'delete', [
+      'sequential' => 1,
+      'group_id' => static::$civicrm_group_id_interest_1,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+    ]);
+
+    // Finally delete the membership list group link to re-set the fixture.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->patch("/lists/dummylistid/members/$subscriber_hash", Argument::any())->shouldBeCalled();
+    $result = civicrm_api3('GroupContact', 'delete', [
+      'group_id' => static::$civicrm_group_id_membership,
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+    ]);
 
   }
   /**
