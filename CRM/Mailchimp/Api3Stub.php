@@ -7,6 +7,7 @@
  * the real Mailchimp API.
  */
 class CRM_Mailchimp_Api3Stub extends CRM_Mailchimp_ApiBase implements CRM_Mailchimp_ApiInterface {
+  protected $debug=FALSE;
   /**
    * @param Array $mock_responses
    *
@@ -18,12 +19,33 @@ class CRM_Mailchimp_Api3Stub extends CRM_Mailchimp_ApiBase implements CRM_Mailch
    * Return a mock response instead of submitting to the real API.
    */
   protected function sendRequest() {
+    if ($this->debug) {
+      print "Mock Mailchimp request: " . json_encode($this->request) . "\n";
+    }
     if (empty($this->mock_responses)) {
-      throw new Exception("No response mocks provided or left.");
+      throw new CRM_Mailchimp_RequestErrorException($this, "No response mocks provided or left. Request: " . json_encode($this->request) ."\n");
     }
     list($curl_info, $result) = array_shift($this->mock_responses);
     return $this->curlResultToResponse($curl_info, $result);
   }
+  /**
+   * Ensure we have no mock responses in queue.
+   */
+  public function clearMockResponses() {
+    $this->mock_responses = [];
+  }
+
+  /**
+   * Queues a mocked response.
+   *
+   * @param array $response which can optionally have keys
+   *
+   * - curl_info
+   *   Usually ommitted. This defaults to
+   *   http_code: 200, content_type: application/json
+   * - result
+   *   String of json. Defaults to empty object.
+   */
   public function addMockResponse($response=[]) {
     if (array_key_exists('curl_info', $response)) {
       $curl_info = $response['curl_info'];
@@ -54,4 +76,7 @@ class CRM_Mailchimp_Api3Stub extends CRM_Mailchimp_ApiBase implements CRM_Mailch
     $this->mock_responses []= [$curl_info, $result];
   }
 
+  public function setDebug($debug) {
+    $this->debug = (bool) $debug;
+  }
 }

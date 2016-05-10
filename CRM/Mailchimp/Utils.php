@@ -277,11 +277,19 @@ class CRM_Mailchimp_Utils {
           ->data->categories;
       }
       catch (CRM_Mailchimp_RequestErrorException $e) {
-        CRM_Core_Error::debug_log_message('Mailchimp error: List $listID is not found.');
-        return NULL;
+        if ($e->http_code == 404) {
+          // Controlled response
+          CRM_Core_Error::debug_log_message('Mailchimp error: List $listID is not found.');
+          return NULL;
+        }
+        else {
+          CRM_Core_Error::debug_log_message('Unhandled Mailchimp error: ' . $e->getMessage());
+          throw $e;
+        }
       }
       catch (CRM_Mailchimp_NetworkErrorException $e) {
-        CRM_Core_Error::debug_log_message('Mailchimp network error.');
+        CRM_Core_Error::debug_log_message('Unhandled Mailchimp network error: ' . $e->getMessage());
+        throw $e;
         return NULL;
       }
       // Re-map $categories from this:

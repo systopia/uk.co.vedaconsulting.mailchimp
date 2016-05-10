@@ -452,6 +452,9 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 
     // FIXME: Dirty hack to skip hook in the case that a Pull from mailchimp has
     // just happened, which will be changing CiviCRM group memberships.
+    // Nb. this is probably mitigated now since we restrict the action of this
+    // hook to when changes are made on a single contact, but there's still the
+    // case that the pull might add/remove one person.
 		require_once 'CRM/Core/Session.php';
     $session = CRM_Core_Session::singleton();
     $skipPostHook = $session->get('skipPostHook');
@@ -493,31 +496,5 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
     // Trigger mini sync for this person and this list.
     $sync = new CRM_Mailchimp_Sync($groups[$objectId]['list_id']);
     $sync->syncSingleContact($objectRef[0]);
-
-    /*
-    // Add / Rejoin Group
-    if ($op == 'create' || $op == 'edit') {
-      $action = 'subscribe';
-    }
-    // Remove / Delete
-    elseif ($op == 'delete') {
-      $action = 'unsubscribe';
-    }
-		
-			
-			// Proceed only if the group is configured with mailing list/groups
-			if (!empty($groups[$objectId])) {
-			
-				// Loop through all contacts added/removed from the group
-        // @todo artfulrobot this is gonig to cause problems if zillions of
-        // groupcontact record are assigned at once because each contact results
-        // in a separate API call.
-				foreach ($objectRef as $contactId) {
-					// Subscribe/Unsubscribe in Mailchimp
-					CRM_Mailchimp_Utils::subscribeOrUnsubsribeToMailchimpList($groups[$objectId], $contactId, $action);
-				}
-			}
-		}		
-     */
 	}
 }

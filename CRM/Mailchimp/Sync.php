@@ -292,22 +292,6 @@ class CRM_Mailchimp_Sync {
     $in_groups = CRM_Mailchimp_Utils::splitGroupTitles($contact['groups'], $this->group_details);
     $currently_a_member = in_array($this->membership_group_id, $in_groups);
 
-    // Are they a member on CiviCRM of the membership list?
-    if (!$currently_a_member) {
-      // Optimisation: If this contact is not and has never been part of the
-      // *membership* group liked to our Mailchimp List then we have nothing to do
-      // here.
-      $result = civicrm_api3('GroupContact', 'get', [
-          'contact_id' => $contact_id,
-          'group_id' => $this->membership_group_id,
-          'status' => "Removed",
-          ]);
-        if (!$result['count']) {
-          // This contact has never been in this list, we have nothing to do.
-          return;
-        }
-    }
-
     if (empty($contact['email'])) {
       // Without an email we can't do anything.
       return;
