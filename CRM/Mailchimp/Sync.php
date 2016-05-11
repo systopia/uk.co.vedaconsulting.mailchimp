@@ -148,22 +148,29 @@ class CRM_Mailchimp_Sync {
   /**
    * Guess the contact id by there only being one email in CiviCRM that matches.
    *
+   * Change in v2.0: it now checks uniqueness by contact id, so if the same
+   * email belongs multiple times to one contact, we can still conclude we've
+   * got the right contact.
+   *
    * This is in a separate method so it can be tested.
    */
   public static function guessContactIdsByUniqueEmail() {
     // If an address is unique, that's the one we need.
-    CRM_Core_DAO::executeQuery(
+    $result = CRM_Core_DAO::executeQuery(
         "UPDATE tmp_mailchimp_push_m m
           JOIN civicrm_email e1 ON m.email = e1.email
-          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email AND e1.id <> e2.id
+          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email AND e1.contact_id <> e2.contact_id
           SET m.cid_guess = e1.contact_id
-          WHERE e2.id IS NULL")->free();
+          WHERE e2.id IS NULL");
+    $result->free();
   }
   /**
    * Guess the contact id for contacts whose only email matches.
    *
    * This is in a separate method so it can be tested.
    * See issue #188
+   *
+   * v2 includes rewritten SQL because of a bug that caused the test to fail.
    */
   public static function guessContactIdsByNameAndEmail() {
 
@@ -172,12 +179,14 @@ class CRM_Mailchimp_Sync {
     // are looking for as well.
     CRM_Core_DAO::executeQuery(
        "UPDATE tmp_mailchimp_push_m m
-          JOIN civicrm_email e1 ON m.email = e1.email
-          JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name 
-          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email
-          LEFT OUTER JOIN civicrm_contact c2 on e2.contact_id = c2.id AND c2.first_name = m.first_name AND c2.last_name = m.last_name AND c2.id <> c1.id
-          SET m.cid_guess = e1.contact_id
-          WHERE m.cid_guess IS NULL AND c2.id IS NULL")->free();
+        INNER JOIN civicrm_email e1 ON m.email = e1.email
+        INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name 
+        SET m.cid_guess = e1.contact_id
+        WHERE m.cid_guess IS NULL AND NOT EXISTS (
+          SELECT c2.id FROM civicrm_email e2 INNER JOIN civicrm_contact c2 ON e2.contact_id = c2.id
+          WHERE e2.email = m.email AND c2.first_name = m.first_name AND c2.last_name = m.last_name
+            AND c2.id != c1.id);
+          ")->free();
   }
   /**
    * Guess the contact id for contacts whose email is found in the temporary
@@ -568,7 +577,7 @@ class CRM_Mailchimp_Sync {
       $mc_interests = unserialize($dao->interests);
 
       // Get interests from CiviCRM.
-      if ($dao->c_groupings) {
+      if ($dao->c_interests) {
         // This contact is in C and MC, but has differences.
         // unpack the interests from CiviCRM.
         $civi_interests = unserialize($dao->c_interests);

@@ -21,3 +21,11 @@ that looks to the subscribers we're expecting to find. This solves the issue
 when two contacts (e.g. related) are in CiviCRM with the same email, but only
 one of them is subscribed to the list - now it will pick the subscriber. This
 test ought to be the fastest of the methods, so it is run first.
+
+The email-is-unique test to identify a contact has been modified such that if
+the email is unique to a particular contact, we guess that contact. Previously
+the email had to be unique in the email table, which excludes the case that
+someone has the same email in several times (e.g. once as a billing, once as a
+bulk...).
+
+The email and name SQL was found buggy so has been rewritten - see tests.

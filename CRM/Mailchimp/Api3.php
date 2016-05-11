@@ -76,35 +76,35 @@ class CRM_Mailchimp_Api3 {
    * Perform a GET request.
    */
   public function get($url, $data=null) {
-    return $this->request('GET', $url, $data);
+    return $this->makeRequest('GET', $url, $data);
   }
 
   /**
    * Perform a POST request.
    */
   public function post($url, Array $data) {
-    return $this->request('POST', $url, $data);
+    return $this->makeRequest('POST', $url, $data);
   }
 
   /**
    * Perform a PUT request.
    */
   public function put($url, Array $data) {
-    return $this->request('PUT', $url, $data);
+    return $this->makeRequest('PUT', $url, $data);
   }
 
   /**
    * Perform a PATCH request.
    */
   public function patch($url, Array $data) {
-    return $this->request('PATCH', $url, $data);
+    return $this->makeRequest('PATCH', $url, $data);
   }
 
   /**
    * Perform a DELETE request.
    */
   public function delete($url, $data=null) {
-    return $this->request('DELETE', $url);
+    return $this->makeRequest('DELETE', $url);
   }
 
   /**
@@ -113,19 +113,53 @@ class CRM_Mailchimp_Api3 {
    * @todo is it quicker to run small ops directly? <10 items?
    *
    */
-  public function batchAndWait(Array $batch) {
-
-    $batch_result = $this->makeBatchRequest($batch);
-
+  public function batchAndWait(Array $batch, $method=NULL) {
     // This can take a long time...
     set_time_limit(0);
-    do {
-      sleep(3);
-      $result = $this->get("/batches/{$batch_result->data->id}");
-    } while ($result->data->status != 'finished');
 
-    // Now complete.
-    return $result;
+    if ($method === NULL) {
+      // Automatically determine fastest method.
+      $method = (count($batch) < 15) ? 'multiple' : 'batch';
+    }
+    elseif (!in_array($method, ['multiple', 'batch'])) {
+      throw new InvalidArgumentException("Method argument must be mulitple|batch|NULL, given '$method'");
+    }
+
+    // Validate the batch operations.
+    foreach ($batch as $i=>$request) {
+      if (count($request)<2) {
+        throw new InvalidArgumentException("Batch item $i invalid - at least two values required.");
+      }
+      if (!preg_match('/^get|post|put|patch|delete$/i', $request[0])) {
+        throw new InvalidArgumentException("Batch item $i has invalid method '$request[0]'.");
+      }
+      if (substr($request[1], 0, 1) != '/') {
+        throw new InvalidArgumentException("Batch item $i has invalid path should begin with /. Given '$request[1]'");
+      }
+    }
+
+    // Choose method and submit.
+    if ($method == 'batch') {
+      // Submit a batch request and wait for it to complete.
+      $batch_result = $this->makeBatchRequest($batch);
+
+      do {
+        sleep(3);
+        $result = $this->get("/batches/{$batch_result->data->id}");
+      } while ($result->data->status != 'finished');
+
+      // Now complete.
+      return $result;
+    }
+    else {
+      // Submit the requests one after another.
+      foreach ($batch as $item) {
+        $method = strtolower($item[0]);
+        $path = $item[1];
+        $data = isset($item[2]) ? $item[2] : [];
+        $this->$method($path, $data);
+      }
+    }
   }
   /**
    * Sends a batch request.
@@ -137,9 +171,6 @@ class CRM_Mailchimp_Api3 {
     $ops = [];
     foreach ($batch as $request) {
       $op = ['method' => strtoupper($request[0]), 'path' => $request[1]];
-      if (substr($op['path'], 0, 1) != '/') {
-        throw new Exception("path $op[path] should begin with /");
-      }
       if (!empty($request[2])) {
         if ($op['method'] == 'GET') {
           $op['params'] = $request[2];
@@ -175,13 +206,13 @@ class CRM_Mailchimp_Api3 {
    * @throw CRM_Mailchimp_NetworkErrorException
    * @throw CRM_Mailchimp_RequestErrorException
    */
-  protected function request($method, $url, $data=null) {
+  protected function makeRequest($method, $url, $data=null) {
     if (substr($url, 0, 1) != '/') {
       throw new InvalidArgumentException("Invalid URL - must begin with root /");
     }
     $this->request = (object) [
       'id' => static::$request_id++,
-      'created' => date('Y-m-d H:i:s'),
+      'created' => microtime(TRUE),
       'completed' => NULL,
       'method' => $method,
       'url' => $this->server . $url,
@@ -218,9 +249,13 @@ class CRM_Mailchimp_Api3 {
       'data' => null,
       ];
 
-    $this->logRequest();
     if ($this->network_enabled) {
       $this->sendRequest();
+    }
+    else {
+      // We're not going to send a request.
+      // So this is our chance to log something.
+      $this->log();
     }
     return $this->response;
   }
@@ -249,26 +284,37 @@ class CRM_Mailchimp_Api3 {
    * For debugging purposes.
    *
    * Does nothing without $log_to being set to a filename.
-   */
-  protected function logRequest() {
-    if ($this->log_to) {
-      $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "--> " . $this->request->method . " " . $this->request->url
-        . "\n\t" . json_encode($this->request) . "\n";
-      file_put_contents($this->log_to, $msg, FILE_APPEND);
-    }
-  }
-  /**
-   * For debugging purposes.
    *
-   * Does nothing without static::$log_to being set to a filename.
+   * Log format is like:
+   * #123 Took
    */
-  protected function logResponse() {
-    if ($this->log_to) {
-      $took = round((time() - strtotime($this->request->created))/60, 2);
-      $msg = date('Y-m-d H:i:s') . " Request #" . $this->request->id . "<-- Took {$took}s. Result: " . $this->response->http_code
-        . "\n\t" . json_encode($this->response) . "\n";
-      file_put_contents($this->log_to, $msg, FILE_APPEND);
+  protected function log() {
+    if (!$this->log_to) {
+      return;
     }
+
+    $msg    = "Request #{$this->request->id}\n=============================================\n";
+    if (!$this->network_enabled) {
+      $msg .= "Network      : DISABLED\n";
+    }
+    $msg   .= "Method       : {$this->request->method}\n";
+    $msg   .= "Url          : {$this->request->url}\n";
+
+    if (isset($this->request->created)) {
+      $msg .= "Took         : " . round((microtime(TRUE) - $this->request->created), 2) . "s\n";
+    }
+    $msg   .= "Response Code: "
+        . (isset($this->response->http_code) ? $this->response->http_code : 'NO RESPONSE HTTP CODE')
+        . "\n";
+
+    $msg   .= "Request Body : " . str_replace("\n", "\n               ",
+      var_export(json_decode($this->request->data), TRUE)) . "\n";
+    $msg   .= "Response Body: " . str_replace("\n", "\n               ",
+      var_export($this->response->data, TRUE));
+    $msg .= "\n\n";
+
+    // Log response.
+    file_put_contents($this->log_to, $msg, FILE_APPEND);
   }
   /**
    * Prepares the response object from the result of a cURL call.
@@ -285,6 +331,7 @@ class CRM_Mailchimp_Api3 {
 
     // Check response.
     if (empty($info['http_code'])) {
+      $this->log();
       throw new CRM_Mailchimp_NetworkErrorException($this);
     }
 
@@ -307,12 +354,12 @@ class CRM_Mailchimp_Api3 {
     if (!$json_returned) {
       // According to Mailchimp docs it may return non-JSON in event of a
       // timeout.
-      $this->logResponse();
+      $this->log();
       throw new CRM_Mailchimp_NetworkErrorException($this);
     }
 
     $this->response->data = $result ? json_decode($result) : null;
-    $this->logResponse();
+    $this->log();
 
     // Check for errors and throw appropriate CRM_Mailchimp_ExceptionBase.
     switch (substr((string) $this->response->http_code, 0, 1)) {

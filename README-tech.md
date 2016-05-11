@@ -90,17 +90,54 @@ The Pull Sync is done by the `CRM_Mailchimp_Sync` class. The steps are:
 
 The test cases are as follows:
 
-## Test identification of contact whose only email is that from Mailchimp.
+## Test identification of contact by known membership group.
+
+An email from Mailchimp can be used to identify the CiviCRM contact if if
+matches among a list of CiviCRM contacts that are in the membership group.
 
 This is done with `SyncIntegrationTest::testGuessContactIdsBySubscribers`
+
+## Test identification of contact by the email only matching one contact.
+
+An email can be matched if it's unique to a particular contact in CiviCRM.
+
+This is done with `SyncIntegrationTest::testGuessContactIdsByUniqueEmail`
+
+## Test identification of contact by email and name match.
+
+An email can be matched along with a first and last name if they all match only
+one contact in CiviCRM.
+
+This is done with `SyncIntegrationTest::testGuessContactIdsByNameAndEmail`
+
 
 ## Test that name changes from Mailchimp are properly pulled.
 
 See integration test `testPullChangesName()` and for the name logic see unit test
 `testUpdateCiviFromMailchimpContactLogic`.
 
+## Test that interest group changes from Mailchimp are properly pulled.
 
-# Posthook used to immediately add/remove a single person.
+See integration tests:
+- `testPullChangesInterests()` For when the group is configured with update
+  permission from Mailchimp to Civi.
+- `testPullChangesNonPullInterests()` For when the group is NOT configured with
+  update permission.
+
+## Test that contacts unknown to CiviCRM when pulled get added.
+
+See integration test `testPullAddsContact()`.
+
+## Test that contacts not received from Mailchimp but in membership group get removed from membership group.
+
+See integration test `testPullRemovesContacts()`.
+
+## Test that if we cannot identify someone because of duplication in CiviCRM we do not keep adding more duplicates...
+
+
+
+
+# Posthook used to immediately add/remove  a single person.
 
 If you *add/remove/delete a single contact* from a group that is associated with a
 Mailchimp list then the posthook is used to detect this and make the change at
@@ -124,8 +161,8 @@ interest change is not attempted to be registered with Mailchimp.
 
 See Tests:
 
-- `testPostHookForMembershipListChanges()`
-- `testPostHookForInterestGroupChanges()`
+- `MailchimpApiIntegrationMockTest::testPostHookForMembershipListChanges()`
+- `MailchimpApiIntegrationMockTest::testPostHookForInterestGroupChanges()`
 
 Because of these limitations, you cannot rely on this hook to keep your list
 up-to-date and will always need to do a CiviCRM to Mailchimp Push sync before

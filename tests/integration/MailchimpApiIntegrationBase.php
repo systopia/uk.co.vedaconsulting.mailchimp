@@ -49,6 +49,14 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     'last_name' => 'Rubble-Test-Record',
     ];
 
+  /** custom_N name for this field */
+  protected static $custom_mailchimp_group;
+  /** custom_N name for this field */
+  protected static $custom_mailchimp_grouping;
+  /** custom_N name for this field */
+  protected static $custom_mailchimp_list;
+  /** custom_N name for this field */
+  protected static $custom_is_mc_update_grouping;
 
   /**
    * Connect to API and create test fixture lists.
@@ -212,6 +220,9 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
       if (empty($custom_ids[$_])) {
         throw new Exception("Expected to find the Custom Field with name $_");
       }
+      // Store as static vars.
+      $var = 'custom_' . strtolower($_);
+      static::${$var} = $custom_ids[$_];
     }
 
     // Next create mapping groups in CiviCRM for membership group
