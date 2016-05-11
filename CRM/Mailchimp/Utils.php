@@ -399,60 +399,7 @@ class CRM_Mailchimp_Utils {
     
   }
   
-  /**
-   * Try to find out already if we can find a unique contact for this e-mail
-   * address.
-   */
-  static function guessCidsMailchimpContacts() {
-    // If an address is unique, that's the one we need.
-    CRM_Core_DAO::executeQuery(
-        "UPDATE tmp_mailchimp_push_m m
-          JOIN civicrm_email e1 ON m.email = e1.email
-          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email AND e1.id <> e2.id
-          SET m.cid_guess = e1.contact_id
-          WHERE e2.id IS NULL")->free();
-    // In the other case, if we find a unique contact with matching
-    // first name, last name and e-mail address, it is probably the one we
-    // are looking for as well.
-    CRM_Core_DAO::executeQuery(
-       "UPDATE tmp_mailchimp_push_m m
-          JOIN civicrm_email e1 ON m.email = e1.email
-          JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name 
-          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email
-          LEFT OUTER JOIN civicrm_contact c2 on e2.contact_id = c2.id AND c2.first_name = m.first_name AND c2.last_name = m.last_name AND c2.id <> c1.id
-          SET m.cid_guess = e1.contact_id
-          WHERE m.cid_guess IS NULL AND c2.id IS NULL")->free();
-  }
 
-  /**
-   * Update first name and last name of the contacts of which we already
-   * know the contact id.
-   */
-  static function updateGuessedContactDetails() {
-    // In theory I could do this with one SQL join statement, but this way
-    // we would bypass user defined hooks. So I will use the API, but only
-    // in the case that the names are really different. This will save
-    // some expensive API calls. See issue #188.
-
-    $dao = CRM_Core_DAO::executeQuery(
-      "SELECT c.id, m.first_name, m.last_name
-       FROM tmp_mailchimp_push_m m
-       JOIN civicrm_contact c ON m.cid_guess = c.id
-       WHERE m.first_name NOT IN ('', COALESCE(c.first_name, ''))
-          OR m.last_name  NOT IN ('', COALESCE(c.last_name,  ''))");
-
-    while ($dao->fetch()) {
-      $params = array('id' => $dao->id);
-      if ($dao->first_name) {
-        $params['first_name'] = $dao->first_name;
-      }
-      if ($dao->last_name) {
-        $params['last_name'] = $dao->last_name;
-      }
-      civicrm_api3('Contact', 'create', $params);
-    }
-    $dao->free();
-  }
 
   /*
    * Create/Update contact details in CiviCRM, based on the data from Mailchimp webhook
@@ -475,7 +422,8 @@ class CRM_Mailchimp_Utils {
         );
      
     if($delay){
-      //To avoid a new duplicate contact to be created as both profile and upemail events are happening at the same time
+      //To avoid a new duplicate contact to be created as both profile and
+      //upemail events are happening at the same time
       sleep(20);
     }
     $contactids = CRM_Mailchimp_Utils::getContactFromEmail($params['EMAIL']);
@@ -642,79 +590,6 @@ class CRM_Mailchimp_Utils {
     return $civiMcGroups;
   }
   
-   /*
-   * Function to delete Mailchimp contact for given CiviCRM email ID
-   */
-  static function deleteMCEmail($emailId = array() ) {
-  CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils deleteMCEmail $emailId', $emailId);
-    /*
-    modified by mathavan@vedaconsulting.co.uk
-    table name civicrm_mc_sync has no longer exist
-    and dont have leid, euid, list_id informations
-    so returning null to avoid the script
-    */
-
-    return NULL;
-
-    //end
-	
-    if (empty($emailId)) {
-      return NULL;
-    }
-    $toDelete = array();
-    $listID = array();
-    $email = NULL;
-    $query = NULL;
-    
-    if (!empty($emailId)) {      
-      $emailIds = implode(',', $emailId);      
-      // @todo I think this code meant to include AND is_latest.
-      // Looks very inefficient otherwise?
-	  #Mathavan@vedaconsulting.co.uk, commmenting the query, table no longer exist
-      //$query = "SELECT * FROM civicrm_mc_sync WHERE email_id IN ($emailIds) ORDER BY id DESC";
-    }
-    $dao = CRM_Core_DAO::executeQuery($query);       
-        
-    while ($dao->fetch()) {
-      $leidun = $dao->mc_leid;
-      $euidun = $dao->mc_euid;
-      $listID = $dao->mc_list_id;   
-      $mc_group = $dao->mc_group;
-      $email_id = $dao->email_id;
-      $email = CRM_Core_DAO::getFieldValue('CRM_Core_DAO_Email', $dao->email_id, 'email', 'id');
- 
-      $toDelete[$listID]['batch'][] = array(
-        'email' => $email,
-        'euid'  => $euidun,
-        'leid'  => $leidun,       
-      );      
-                 
-      $params = array(
-        'email_id'   => $dao->email_id,
-        'mc_list_id' => $listID,
-        'mc_group'   => $mc_group,
-        'mc_euid'  => $euidun,
-        'mc_leid' => $leidun,            
-        'sync_status' => 'Removed'
-      );
-      
-      CRM_Mailchimp_BAO_MCSync::create($params);   
-    } 
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils deleteMCEmail $toDelete', $toDelete);
-    foreach ($toDelete as $listID => $vals) {
-      // sync contacts using batchunsubscribe
-      $mailchimp = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-      $results   = $mailchimp->batchUnsubscribe( 
-        $listID,
-        $vals['batch'], 
-        TRUE,
-        TRUE, 
-        TRUE
-      );  
-    }
-    
-    return $toDelete;
-  }
   
    /**
    * Function to call syncontacts with smart groups and static groups

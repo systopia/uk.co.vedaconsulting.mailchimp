@@ -301,6 +301,7 @@ function mailchimp_civicrm_pre( $op, $objectName, $id, &$params ) {
   );
 
   if($objectName == 'Email') {
+    return; // @todo 
     // If about to delete an email in CiviCRM, we must delete it from Mailchimp
     // because we won't get chance to delete it once it's gone.
     //
@@ -326,6 +327,7 @@ function mailchimp_civicrm_pre( $op, $objectName, $id, &$params ) {
 
   // If deleting an individual, delete their (bulk) email address from Mailchimp.
   if ($op == 'delete' && $objectName == 'Individual') {
+    return; // @todo 
     $result = civicrm_api('Contact', 'get', $params1);
     foreach ($result['values'] as $key => $value) {
       $emailId  = $value['email_id'];

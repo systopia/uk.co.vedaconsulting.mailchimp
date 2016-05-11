@@ -45,7 +45,7 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
    */
   protected static $civicrm_contact_2 = [
     'contact_id' => NULL,
-    'first_name' => 'Betty',
+    'first_name' => 'Barney',
     'last_name' => 'Rubble-Test-Record',
     ];
 
@@ -287,7 +287,7 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     $result = civicrm_api3('Group', 'create', [
       'id'                                 => $group_id,
       $custom_ids['Mailchimp_List']        => static::$test_list_id,
-      $custom_ids['is_mc_update_grouping'] => 0,
+      $custom_ids['is_mc_update_grouping'] => 1,
       $custom_ids['Mailchimp_Grouping']    => static::$test_interest_category_id,
       $custom_ids['Mailchimp_Group']       => $interest_id,
     ]);
