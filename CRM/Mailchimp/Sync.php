@@ -31,6 +31,10 @@ class CRM_Mailchimp_Sync {
    */
   protected $membership_group_id;
 
+  /** Records whether and what mode the last collection was run in. */
+  protected $collect_mailchimp = NULL;
+  /** Records whether and what mode the last collection was run in. */
+  protected $collect_civicrm = NULL;
   public function __construct($list_id) {
     $this->list_id = $list_id;
     $this->group_details = CRM_Mailchimp_Utils::getGroupsToSync($groupIDs=[], $list_id, $membership_only=FALSE);
@@ -67,22 +71,7 @@ class CRM_Mailchimp_Sync {
     if (!in_array($mode, ['pull', 'push'])) {
       throw new InvalidArgumentException(__FUNCTION__ . " expects push/pull but called with '$mode'.");
     }
-    // Create a temporary table.
-    // Nb. these are temporary tables but we don't use TEMPORARY table because
-    // they are needed over multiple sessions because of queue.
-
-    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
-    $dao = CRM_Core_DAO::executeQuery(
-      "CREATE TABLE tmp_mailchimp_push_m (
-        email VARCHAR(200) NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        hash CHAR(32) NOT NULL,
-        interests VARCHAR(4096) NOT NULL,
-        cid_guess INT(10),
-        PRIMARY KEY (email, hash),
-        KEY (cid_guess))
-        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+    $dao = static::createTemporaryTableForMailchimp();
 
     // Cheekily access the database directly to obtain a prepared statement.
     $db = $dao->getDatabaseConnection();
@@ -143,8 +132,25 @@ class CRM_Mailchimp_Sync {
     fclose($handle);
     $db->freePrepared($insert);
 
-    // Guess the contact ID's, to speed up syncPullUpdates (See issue #188).
+    // Record that this has been done.
+    $this->collect_mailchimp = $mode;
 
+    // Do the fast SQL identification against CiviCRM contacts.
+    if ($this->collect_civicrm == $mode) {
+      // We have done the collection for CiviCRM into the temporary table for
+      // this same list and same mode, so we're safe to figure contacts from
+      // that.
+      static::guessContactIdsBySubscribers();
+    }
+    static::guessContactIdsByUniqueEmail();
+    static::guessContactIdsByNameAndEmail();
+  }
+  /**
+   * Guess the contact id by there only being one email in CiviCRM that matches.
+   *
+   * This is in a separate method so it can be tested.
+   */
+  public static function guessContactIdsByUniqueEmail() {
     // If an address is unique, that's the one we need.
     CRM_Core_DAO::executeQuery(
         "UPDATE tmp_mailchimp_push_m m
@@ -152,6 +158,15 @@ class CRM_Mailchimp_Sync {
           LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email AND e1.id <> e2.id
           SET m.cid_guess = e1.contact_id
           WHERE e2.id IS NULL")->free();
+  }
+  /**
+   * Guess the contact id for contacts whose only email matches.
+   *
+   * This is in a separate method so it can be tested.
+   * See issue #188
+   */
+  public static function guessContactIdsByNameAndEmail() {
+
     // In the other case, if we find a unique contact with matching
     // first name, last name and e-mail address, it is probably the one we
     // are looking for as well.
@@ -163,6 +178,27 @@ class CRM_Mailchimp_Sync {
           LEFT OUTER JOIN civicrm_contact c2 on e2.contact_id = c2.id AND c2.first_name = m.first_name AND c2.last_name = m.last_name AND c2.id <> c1.id
           SET m.cid_guess = e1.contact_id
           WHERE m.cid_guess IS NULL AND c2.id IS NULL")->free();
+  }
+  /**
+   * Guess the contact id for contacts whose email is found in the temporary
+   * table made by collectCiviCrm.
+   *
+   * If collectCiviCrm has been run, then we can identify matching contacts very
+   * easily. This avoids problems with multiple contacts in CiviCRM having the
+   * same email address but only one of them is subscribed. :-)
+   *
+   * **WARNING** it would be dangerous to run this if collectCiviCrm() had been run
+   * on a different list(!). For this reason, these conditions are checked by
+   * collectMailchimp().
+   *
+   * This is in a separate method so it can be tested.
+   */
+  public static function guessContactIdsBySubscribers() {
+    CRM_Core_DAO::executeQuery(
+       "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
+        SET m.cid_guess = c.contact_id
+        WHERE m.cid_guess IS NULL")->free();
   }
 
   /**
@@ -176,20 +212,8 @@ class CRM_Mailchimp_Sync {
     if (!in_array($mode, ['pull', 'push'])) {
       throw new InvalidArgumentException(__FUNCTION__ . " expects push/pull but called with '$mode'.");
     }
-    // Nb. these are temporary tables but we don't use TEMPORARY table because
-    // they are needed over multiple sessions because of queue.
-    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
-    $dao = CRM_Core_DAO::executeQuery("CREATE TABLE tmp_mailchimp_push_c (
-        contact_id INT(10) UNSIGNED NOT NULL,
-        email VARCHAR(200) NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        hash CHAR(32) NOT NULL,
-        interests VARCHAR(4096) NOT NULL,
-        PRIMARY KEY (email, hash)
-        )
-        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
     // Cheekily access the database directly to obtain a prepared statement.
+    $dao = static::createTemporaryTableForCiviCRM();
     $db = $dao->getDatabaseConnection();
     $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_c VALUES(?, ?, ?, ?, ?, ?)');
 
@@ -253,6 +277,9 @@ class CRM_Mailchimp_Sync {
 
     // Tidy up.
     $db->freePrepared($insert);
+
+    // Record that this has been done.
+    $this->collect_civicrm = $mode;
   }
   /**
    * Drop tmp_mailchimp_push_m and tmp_mailchimp_push_c, if they exist.
@@ -261,9 +288,52 @@ class CRM_Mailchimp_Sync {
    * for the purposes of syncing to/from Mailchimp/CiviCRM and are not needed
    * outside of those operations.
    */
-  public function dropTemporaryTables() {
+  public static function dropTemporaryTables() {
     CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
     CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
+  }
+  /**
+   * Create new tmp_mailchimp_push_m.
+   *
+   * Nb. these are temporary tables but we don't use TEMPORARY table because
+   * they are needed over multiple sessions because of queue.
+   */
+  public static function createTemporaryTableForMailchimp() {
+    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
+    $dao = CRM_Core_DAO::executeQuery(
+      "CREATE TABLE tmp_mailchimp_push_m (
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        hash CHAR(32) NOT NULL,
+        interests VARCHAR(4096) NOT NULL,
+        cid_guess INT(10),
+        PRIMARY KEY (email, hash),
+        KEY (cid_guess))
+        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+
+    // Convenience in collectMailchimp.
+    return $dao;
+  }
+  /**
+   * Create new tmp_mailchimp_push_c.
+   *
+   * Nb. these are temporary tables but we don't use TEMPORARY table because
+   * they are needed over multiple sessions because of queue.
+   */
+  public static function createTemporaryTableForCiviCRM() {
+    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
+    $dao = CRM_Core_DAO::executeQuery("CREATE TABLE tmp_mailchimp_push_c (
+        contact_id INT(10) UNSIGNED NOT NULL,
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        hash CHAR(32) NOT NULL,
+        interests VARCHAR(4096) NOT NULL,
+        PRIMARY KEY (email, hash)
+        )
+        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+    return $dao;
   }
   /**
    * Convert a 'groups' string as provided by CiviCRM's API to a structured
@@ -323,38 +393,104 @@ class CRM_Mailchimp_Sync {
   }
 
   /**
-   * Subscribes the contents of the tmp_mailchimp_push_c table.
+   * "Push" sync.
+   *
+   * Sends additions, edits (compared to tmp_mailchimp_push_m), deletions.
    */
   public function updateMailchimpFromCivi() {
 
+    // Additions, changes.
     $operations = [];
-    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_c;");
+    $dao = CRM_Core_DAO::executeQuery(
+      "SELECT
+      c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name,
+      c.email c_email,
+      m.interests m_interests, m.first_name m_first_name, m.last_name m_last_name,
+      m.email m_email
+      FROM tmp_mailchimp_push_c c
+      LEFT JOIN tmp_mailchimp_push_m m ON c.email = m.email;");
+
     $url_prefix = "/lists/$this->list_id/members/";
     while ($dao->fetch()) {
 
-      $op = [
-        'PUT',
-        $url_prefix . md5(strtolower($dao->email)),
-        [
-          'status' => 'subscribed',
-          'email_address' => $dao->email,
-          'interests' => unserialize($dao->interests),
-          'merge_fields' => [
-            'FNAME' => $dao->first_name,
-            'LNAME' => $dao->last_name,
-          ],
-        ]
-      ];
+      $params = static::updateMailchimpFromCiviLogic(
+        ['email' => $dao->c_email, 'first_name' => $dao->c_first_name, 'last_name' => $dao->c_last_name, 'interests' => $dao->c_interests],
+        ['email' => $dao->m_email, 'first_name' => $dao->m_first_name, 'last_name' => $dao->m_last_name, 'interests' => $dao->m_interests]);
 
-      $operations []= $op;
+      if (!$params) {
+        // This is the case if the changes could not be made due to policy
+        // reasons, e.g. a missing name in CiviCRM should not overwrite a
+        // provided name in Mailchimp; this is a difference but it's not one we
+        // will correct.
+        continue;
+      }
+
+      $params['status'] = 'subscribed';
+
+      // Add the operation to the batch.
+      $operations []= ['PUT', $url_prefix . md5(strtolower($dao->c_email)), $params];
     }
 
-    $api = CRM_Mailchimp_Utils::getMailchimpApi();
-    $result = $api->batchAndWait($operations);
-    // print "Batch results: " . $result->data->response_body_url . "\n";
+    // Now consider deletions of those not in membership group at CiviCRM but
+    // there at Mailchimp.
+    foreach ($this->getEmailsNotInCiviButInMailchimp() as $email) {
+      $operations []= ['PATCH', $url_prefix . md5(strtolower($email)), ['status' => 'unsubscribed']];
+    }
+
+    if ($operations) {
+      $api = CRM_Mailchimp_Utils::getMailchimpApi();
+      $result = $api->batchAndWait($operations);
+      // print "Batch results: " . $result->data->response_body_url . "\n";
+    }
   }
 
   /**
+   * Logic to determine update needed.
+   *
+   * This is separate from the method that collects a batch update so that it
+   * can be tested more easily.
+   *
+   * @param array $civi_details Array of civicrm details from
+   * tmp_mailchimp_push_c
+   * @param array $mailchimp_details Array of mailchimp details from
+   * tmp_mailchimp_push_m
+   * @return array changes in format required by Mailchimp API.
+   */
+  public static function updateMailchimpFromCiviLogic($civi_details, $mailchimp_details) {
+
+    $params = [];
+
+    if ($civi_details['email'] && $civi_details['email'] != $mailchimp_details['email']) {
+      // This is the case for additions; when we're adding someone new.
+      $params['email_address'] = $civi_details['email'];
+    }
+
+    if ($civi_details['interests'] && $civi_details['interests'] != $mailchimp_details['interests']) {
+      // Civi's Interest field will unpack to an empty array if we don't have
+      // any mapped interest groups. In this case we don't need to send the
+      // interests to Mailchimp at all, so we check for that.
+      // In the case of adding a new person from CiviCRM to Mailchimp, the
+      // Mailchimp interests passed in will be empty, but the CiviCRM one will
+      // be 'a:0:{}' since that is the serialized version of [].
+      $interests = unserialize($civi_details['interests']);
+      if (!empty($interests)) {
+        $params['interests'] = $interests;
+      }
+    }
+
+    if ($civi_details['first_name'] && $civi_details['first_name'] != $mailchimp_details['first_name']) {
+      $params['merge_fields']['FNAME'] = $civi_details['first_name'];
+    }
+    if ($civi_details['last_name'] && $civi_details['last_name'] != $mailchimp_details['last_name']) {
+      $params['merge_fields']['LNAME'] = $civi_details['last_name'];
+    }
+
+    return $params;
+  }
+
+  /**
+   * "Pull" sync.
+   *
    * Updates CiviCRM from Mailchimp using the tmp_mailchimp_push_[cm] tables.
    *
    * It is assumed that collections (in 'pull' mode) and `removeInSync` have
@@ -401,15 +537,10 @@ class CRM_Mailchimp_Sync {
         // Update the first name and last name of the contacts we already
         // matched, if needed and making sure we don't overwrite
         // something with nothing. See issue #188.
-        $edits = [];
-        if ($dao->first_name && $dao->first_name != $dao->c_first_name) {
-          // We have a first name from Mailchimp and it's different to ours.
-          $edits['first_name'] = $dao->first_name;
-        }
-        if ($dao->last_name && $dao->last_name != $dao->c_last_name) {
-          // We have a last name from Mailchimp and it's different to ours.
-          $edits['last_name'] = $dao->last_name;
-        }
+        $edits = static::updateCiviFromMailchimpContactLogic(
+          ['first_name' => $dao->first_name, 'last_name' => $dao->last_name],
+          ['first_name' => $dao->c_first_name, 'last_name' => $dao->c_last_name]
+        );
         if ($edits) {
           // There are changes to be made so make them now.
           civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
@@ -505,6 +636,31 @@ class CRM_Mailchimp_Sync {
 		$session->set('skipPostHook', '');
   }
   /**
+   * Logic to determine update needed for pull.
+   *
+   * This is separate from the method that collects a batch update so that it
+   * can be tested more easily.
+   *
+   * @param array $mailchimp_details Array of mailchimp details from
+   * tmp_mailchimp_push_m
+   * @param array $civi_details Array of civicrm details from
+   * tmp_mailchimp_push_c
+   * @return array changes in format required by Mailchimp API.
+   */
+  public static function updateCiviFromMailchimpContactLogic($mailchimp_details, $civi_details) {
+
+    $edits = [];
+
+    foreach (['first_name', 'last_name'] as $field) {
+      if ($mailchimp_details[$field] && $mailchimp_details[$field] != $civi_details[$field]) {
+        $edits[$field] = $mailchimp_details[$field];
+      }
+    }
+
+    return $edits;
+  }
+
+  /**
    * Update first name and last name of the contacts of which we already
    * know the contact id.
    */
@@ -549,7 +705,7 @@ class CRM_Mailchimp_Sync {
 
     $emails = [];
     while ($dao->fetch()) {
-      $batch[] = $dao->email;
+      $emails[] = $dao->email;
     }
     return $emails;
   }

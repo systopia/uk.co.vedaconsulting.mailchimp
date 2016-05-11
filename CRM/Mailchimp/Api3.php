@@ -48,8 +48,8 @@ class CRM_Mailchimp_Api3 {
    *  accessed directly as a property of this object, too.
    */
   public $response;
-  /** for debugging */
-  static $request_id=0;
+  /** For debugging. */
+  protected static $request_id=0;
   /** supply a filename to start logging of all API requests and responses.. */
   public $log_to;
   /**
@@ -109,8 +109,12 @@ class CRM_Mailchimp_Api3 {
 
   /**
    * Perform a /batches POST request and sit and wait for the result.
+   *
+   * @todo is it quicker to run small ops directly? <10 items?
+   *
    */
   public function batchAndWait(Array $batch) {
+
     $batch_result = $this->makeBatchRequest($batch);
 
     // This can take a long time...
