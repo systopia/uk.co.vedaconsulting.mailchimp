@@ -640,8 +640,8 @@ class CRM_Mailchimp_Sync {
       'status' => 'subscribed',
       'email_address' => $contact['email'],
       'merge_fields' => [
-        'fname' => $contact['first_name'],
-        'lname' => $contact['last_name'],
+        'FNAME' => $contact['first_name'],
+        'LNAME' => $contact['last_name'],
         ],
     ];
     // Do interest groups.

@@ -56,7 +56,9 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
   public static function setUpBeforeClass() {
   }
   /**
-   * Connect to API and create test fixture lists.
+   * Connect to API and create test fixture list.
+   *
+   * Creates one list with one interest category and two interests.
    */
   public static function createMailchimpFixtures() {
     try {
@@ -184,7 +186,14 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     return $interest_id;
   }
   /**
-   * Connect to API and create test fixture lists.
+   * Creates CiviCRM fixtures.
+   *
+   * Creates three groups and two contacts. Groups:
+   *
+   * 1. Group tracks membership of mailchimp test list.
+   * 2. Group tracks interest 1
+   * 3. Group tracks interest 2
+   *
    */
   public static function createCiviCrmFixtures() {
 
@@ -255,7 +264,6 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
       ]);
 
     if ($result['count'] == 0) {
-      print "Creating contact...\n";
       // Create the contact.
       $result = civicrm_api3('Contact', 'create', ['sequential' => 1,
         'contact_type' => 'Individual',
@@ -366,7 +374,7 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     // Delete test contact(s)
     foreach ([static::$civicrm_contact_1, static::$civicrm_contact_2] as $contact) {
       if (!empty($contact['contact_id'])) {
-        print "Deleting test contact " . $contact['contact_id'] . "\n";
+        //print "Deleting test contact " . $contact['contact_id'] . "\n";
         $contact_id = (int) $contact['contact_id'];
         if ($contact_id>0) {
           $result = civicrm_api3('Contact', 'delete', ['id' => $contact_id, 'skip_undelete' => 1]);
@@ -376,7 +384,7 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
 
     // Delete test group(s)
     if (static::$civicrm_group_id_membership) {
-      print "deleting test list ".static::$civicrm_group_id_membership ."\n";
+      //print "deleting test list ".static::$civicrm_group_id_membership ."\n";
       // Ensure this group is set to be the membership group.
       $result = civicrm_api3('Group', 'delete', ['id' => static::$civicrm_group_id_membership]);
     }
