@@ -54,27 +54,23 @@ class CRM_Mailchimp_Sync {
     // they are needed over multiple sessions because of queue.
 
     CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
-    CRM_Core_DAO::executeQuery(
+    $dao = CRM_Core_DAO::executeQuery(
       "CREATE TABLE tmp_mailchimp_push_m (
         email VARCHAR(200) NOT NULL,
         first_name VARCHAR(100) NOT NULL,
         last_name VARCHAR(100) NOT NULL,
-        hash CHAR(32),
+        hash CHAR(32) NOT NULL,
         interests VARCHAR(4096) NOT NULL,
         cid_guess INT(10),
-        PRIMARY KEY (email, hash))
+        PRIMARY KEY (email, hash),
+        KEY (cid_guess))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
-    // I'll use the cid_guess column to store the cid when it is
-    // immediately clear. This will speed up pulling updates (see #118).
-    // Create an index so that this cid_guess can be used for fast
-    // searching.
-    $dao = CRM_Core_DAO::executeQuery(
-        "CREATE INDEX index_cid_guess ON tmp_mailchimp_push_m(cid_guess);");
 
     // Cheekily access the database directly to obtain a prepared statement.
     $db = $dao->getDatabaseConnection();
-    //$insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, euid, leid, hash, groupings) VALUES(?, ?, ?, ?, ?, ?, ?)');
-    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m(email, first_name, last_name, hash, interests) VALUES(?, ?, ?, ?, ?)');
+    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_m
+             (email, first_name, last_name, hash, interests)
+      VALUES (?,     ?,          ?,         ?,    ?)');
 
     // We need to know what grouping data we care about. The rest we completely ignore.
     // We only care about CiviCRM groups that are mapped to this MC List.
@@ -116,13 +112,16 @@ class CRM_Mailchimp_Sync {
         // for comparison with the hash created from the CiviCRM data (elsewhere).
         $hash = md5($member->email_address . $first_name . $last_name . $interests);
         // run insert prepared statement
-        $db->execute($insert, [
+        $result = $db->execute($insert, [
           $member->email_address,
           $first_name,
-          $lasts_name,
+          $last_name,
           $hash,
           $interests,
         ]);
+        if ($result instanceof DB_Error) {
+          throw new Exception ($result->message . "\n" . $result->userinfo);
+        }
       }
     }
 
@@ -300,7 +299,6 @@ class CRM_Mailchimp_Sync {
 
     $api = CRM_Mailchimp_Utils::getMailchimpApi();
     $result = $api->batchAndWait($operations);
-    // @todo xxx
     // print "Batch results: " . $result->data->response_body_url . "\n";
   }
 
@@ -322,6 +320,27 @@ class CRM_Mailchimp_Sync {
       $batch[] = $dao->email;
     }
     return $emails;
+  }
+  /**
+   * Removes from the temporary tables those records that do not need processing.
+   *
+   * @return int
+   */
+  public function removeInSync() {
+    // Delete records have the same hash - these do not need an update.
+    // count for testing purposes.
+    $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
+      INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
+    $dao->fetch();
+    $count = $dao->co;
+    if ($count > 0) {
+      CRM_Core_DAO::executeQuery(
+        "DELETE m, c
+         FROM tmp_mailchimp_push_m m
+         INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
+    }
+    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Form_Sync syncIdentical $count= ', $count);
+    return $count;
   }
   /**
    * Return a count of the members on Mailchimp from the tmp_mailchimp_push_m

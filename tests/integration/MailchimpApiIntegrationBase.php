@@ -40,6 +40,14 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     'first_name' => 'Wilma',
     'last_name' => 'Flintstone-Test-Record',
     ];
+  /**
+   * array Test contact 2
+   */
+  protected static $civicrm_contact_2 = [
+    'contact_id' => NULL,
+    'first_name' => 'Betty',
+    'last_name' => 'Rubble-Test-Record',
+    ];
 
 
   /**
@@ -223,15 +231,26 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     static::$civicrm_group_id_interest_2 = (int) static::createMappedInterestGroup($custom_ids, static::C_TEST_INTEREST_GROUP_NAME_2, static::$test_interest_id_2);
 
 
-    // Now create test contact 1
+    // Now create test contacts
+    static::createTestContact(static::$civicrm_contact_1);
+    static::createTestContact(static::$civicrm_contact_2);
+  }
+  /**
+   * Create a contact in CiviCRM
+   *
+   * The input array is added to, adding email, contact_id and subscriber_hash
+   *
+   * @param array bare-bones contact details including just the keys: first_name, last_name.
+   *
+   */
+  public static function createTestContact(&$contact) {
     $domain = preg_replace('@^https?://([^/]+).*$@', '$1', CIVICRM_UF_BASEURL);
-    $email = strtolower(static::$civicrm_contact_1['first_name'] . '.' . static::$civicrm_contact_1['last_name'])
-      . '@' . $domain;
-    static::$civicrm_contact_1['email'] = $email;
-    static::$civicrm_contact_1['subscriber_hash'] = md5(strtolower($email));
+    $email = strtolower($contact['first_name'] . '.' . $contact['last_name']) . '@' . $domain;
+    $contact['email'] = $email;
+    $contact['subscriber_hash'] = md5(strtolower($email));
     $result = civicrm_api3('Contact', 'get', ['sequential' => 1,
-      'first_name' => static::$civicrm_contact_1['first_name'],
-      'last_name'  => static::$civicrm_contact_1['last_name'],
+      'first_name' => $contact['first_name'],
+      'last_name'  => $contact['last_name'],
       'email'      => $email,
       ]);
 
@@ -240,12 +259,13 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
       // Create the contact.
       $result = civicrm_api3('Contact', 'create', ['sequential' => 1,
         'contact_type' => 'Individual',
-        'first_name' => static::$civicrm_contact_1['first_name'],
-        'last_name'  => static::$civicrm_contact_1['last_name'],
+        'first_name' => $contact['first_name'],
+        'last_name'  => $contact['last_name'],
         'email'      => $email,
       ]);
     }
-    static::$civicrm_contact_1['contact_id'] = (int) $result['values'][0]['id'];
+    $contact['contact_id'] = (int) $result['values'][0]['id'];
+    return $contact;
   }
   /**
    * Create a group in CiviCRM that maps to the interest group name.
@@ -343,17 +363,17 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
   public static function tearDownCiviCrmFixtures() {
     // CiviCRM teardown.
     //
-    // Delete test contacts
-    if (!empty(static::$civicrm_contact_1['contact_id'])) {
-      print "Deleting test contact " . static::$civicrm_contact_1['contact_id'] . "\n";
-      $contact_id = (int) static::$civicrm_contact_1['contact_id'];
-      if ($contact_id>0) {
-        $result = civicrm_api3('Contact', 'delete', [
-          'id' => $contact_id,
-          'skip_undelete' => 1,
-        ]);
+    // Delete test contact(s)
+    foreach ([static::$civicrm_contact_1, static::$civicrm_contact_2] as $contact) {
+      if (!empty($contact['contact_id'])) {
+        print "Deleting test contact " . $contact['contact_id'] . "\n";
+        $contact_id = (int) $contact['contact_id'];
+        if ($contact_id>0) {
+          $result = civicrm_api3('Contact', 'delete', ['id' => $contact_id, 'skip_undelete' => 1]);
+        }
       }
     }
+
     // Delete test group(s)
     if (static::$civicrm_group_id_membership) {
       print "deleting test list ".static::$civicrm_group_id_membership ."\n";

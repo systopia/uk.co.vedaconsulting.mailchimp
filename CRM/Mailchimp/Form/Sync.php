@@ -637,23 +637,4 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
     CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Form_Sync updatePushStats $updates= ', $updates);
   }
   
-  /**
-   * Removes from the temporary tables those records that do not need processing.
-   */
-  static function syncIdentical() {
-    //CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Sync syncIdentical $count= ', $count);
-    // Delete records have the same hash - these do not need an update.
-    // count
-    $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
-      INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
-    $dao->fetch();
-    $count = $dao->co;
-    CRM_Core_DAO::executeQuery(
-      "DELETE m, c
-       FROM tmp_mailchimp_push_m m
-       INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
-
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Form_Sync syncIdentical $count= ', $count);
-    return $count;
-  }
 }

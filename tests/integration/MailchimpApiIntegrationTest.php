@@ -106,7 +106,12 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync->collectCiviCrm();
       $this->assertEquals(1, $sync->countCiviCrmMembers());
 
-      // Check that removals are zero.
+      // There should not be any in sync records.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Check that removals (i.e. someone in Mailchimp but not/no longer in
+      // Civi's group) are zero.
       $to_delete = $sync->getEmailsNotInCiviButInMailchimp();
       $this->assertEquals(0, count($to_delete));
 
@@ -178,6 +183,175 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // Check their interest group was unset.
       $result = $api->get("/lists/" . static::$test_list_id . "/members/" . static::$civicrm_contact_1['subscriber_hash'], ['fields' => 'status,interests'])->data;
       $this->assertEquals((object) [static::$test_interest_id_1 => FALSE, static::$test_interest_id_2 => FALSE], $result->interests);
+
+      // Add them to the 2nd interest group.
+      // While this is a dull test, we assume it works if the other interest
+      // group one did, it leaves the fixture with one on and one off which is a
+      // good mix for the next test.
+      $result = civicrm_api3('GroupContact', 'create', [
+        'sequential' => 1,
+        'group_id' => static::$civicrm_group_id_interest_2,
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'status' => "Added",
+      ]);
+      // Check their interest group was set.
+      $result = $api->get("/lists/" . static::$test_list_id . "/members/" . static::$civicrm_contact_1['subscriber_hash'], ['fields' => 'status,interests'])->data;
+      $this->assertEquals((object) [static::$test_interest_id_1 => FALSE, static::$test_interest_id_2 => TRUE], $result->interests);
+    }
+    catch (CRM_Mailchimp_Exception $e) {
+      // Spit out request and response for debugging.
+      print "Request:\n";
+      print_r($e->request);
+      print "Response:\n";
+      print_r($e->response);
+      // re-throw exception.
+      throw $e;
+    }
+  }
+
+  /**
+   * Test collectMailchimp and collectCiviCrm work as expected.
+   *
+   * The systems are in sync, so both collections should match.
+   *
+   * Ensure we have someone on the list with interest2 by this:
+   * @depends testSyncInterestGroupings
+   */
+  public function testCollections() {
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+
+    try {
+      $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+      $sync->collectMailchimp();
+      $this->assertEquals(1, $sync->countMailchimpMembers());
+      $sync->collectCiviCrm();
+      $this->assertEquals(1, $sync->countCiviCrmMembers());
+
+      // This should return 1
+      $dao = CRM_Core_DAO::executeQuery("SELECT * FROM tmp_mailchimp_push_m");
+      $dao->fetch();
+      $mc = [
+        'email' => $dao->email,
+        'first_name' => $dao->first_name,
+        'last_name' => $dao->last_name,
+        'interests' => $dao->interests,
+        'hash' => $dao->hash,
+        'cid_guess' => $dao->cid_guess,
+      ];
+      $dao = CRM_Core_DAO::executeQuery("SELECT * FROM tmp_mailchimp_push_c");
+      $dao->fetch();
+      $civi = [
+        'email' => $dao->email,
+        'email_id' => $dao->email_id,
+        'contact_id' => $dao->contact_id,
+        'first_name' => $dao->first_name,
+        'last_name' => $dao->last_name,
+        'interests' => $dao->interests,
+        'hash' => $dao->hash,
+      ];
+      $this->assertEquals($civi['hash'], $mc['hash']);
+      $this->assertEquals($civi['first_name'], $mc['first_name']);
+      $this->assertEquals($civi['last_name'], $mc['last_name']);
+      $this->assertEquals($civi['email'], $mc['email']);
+      $this->assertEquals($civi['interests'], $mc['interests']);
+
+      // As the records are in sync, they should be and deleted.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(1, $in_sync);
+
+      // Now check the tables are both empty.
+      $this->assertEquals(0, $sync->countMailchimpMembers());
+      $this->assertEquals(0, $sync->countCiviCrmMembers());
+    }
+    catch (CRM_Mailchimp_Exception $e) {
+      // Spit out request and response for debugging.
+      print "Request:\n";
+      print_r($e->request);
+      print "Response:\n";
+      print_r($e->response);
+      // re-throw exception.
+      throw $e;
+    }
+  }
+
+  /**
+   * Test push updates a record that changed in CiviCRM.
+   *
+   * Ensure we have someone on the list with interest2 by this:
+   * @depends testCollections
+   */
+  public function testPushChangedName() {
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+
+    try {
+      // Let's change the name of our test record
+      $this->assertNotEmpty(static::$civicrm_contact_1['contact_id']);
+      civicrm_api3('Contact', 'create', [
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'first_name' => 'Betty',
+        ]);
+
+      $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+      $sync->collectMailchimp();
+      $this->assertEquals(1, $sync->countMailchimpMembers());
+      $sync->collectCiviCrm();
+      $this->assertEquals(1, $sync->countCiviCrmMembers());
+
+      // As the records are not in sync, none should get deleted.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Now change name back and instead change their interests.
+      civicrm_api3('Contact', 'create', [
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'first_name' => static::$civicrm_contact_1['first_name'],
+        ]);
+      // Avoid the hook doing the update.
+      $api->setNetworkEnabled(FALSE);
+      $result = civicrm_api3('GroupContact', 'create', [
+        'sequential' => 1,
+        'group_id' => static::$civicrm_group_id_interest_1,
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'status' => "Added",
+      ]);
+      $api->setNetworkEnabled(TRUE);
+      // re-collect the CiviCRM data and check it's still just one record.
+      $sync->collectCiviCrm();
+      $this->assertEquals(1, $sync->countCiviCrmMembers());
+      // As the records are not in sync, none should get deleted.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Change the name again as this is another thing we can test gets updated
+      // correctly.
+      civicrm_api3('Contact', 'create', [
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'first_name' => 'Betty',
+        ]);
+
+      // Add another contact.
+      $this->assertNotEmpty(static::$civicrm_contact_2['contact_id']);
+      $result = civicrm_api3('GroupContact', 'create', [
+        'sequential' => 1,
+        'group_id' => static::$civicrm_group_id_membership,
+        'contact_id' => static::$civicrm_contact_2['contact_id'],
+        'status' => "Added",
+      ]);
+      // Now collect Civi again.
+      $sync->collectCiviCrm();
+      $this->assertEquals(2, $sync->countCiviCrmMembers());
+      // No records in sync, check this.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Send updates to Mailchimp.
+      $sync->addFromCiviCrm();
+
+      // Now re-collect from Mailchimp and check all are in sync.
+      $sync->collectMailchimp();
+      $this->assertEquals(2, $sync->countMailchimpMembers());
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(2, $in_sync);
 
     }
     catch (CRM_Mailchimp_Exception $e) {
@@ -407,7 +581,6 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
 }
 
 //
-// test multiple interests are always compared in a standard way.
 // test that collect Civi collects right interests data.
 // test that collect Mailchimp collects right interests data.
 //
