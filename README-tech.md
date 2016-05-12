@@ -14,7 +14,24 @@ that interest group, e.g. a group that you identify with a smart group in
 CiviCRM. Typically such groups should be considered internal and therefore
 hidden from subscribers at all times.
 
-Tests are provided at different levels.
+## About email selection.
+
+In order to be subscribed, the contact must:
+
+- have an email available
+- not be deceased
+- not have `is_opt_out` set
+- not have `do_not_email` set
+
+In terms of subscribing people from CiviCRM to Mailchimp, it will use the first
+available (i.e. not "on hold") email in this order:
+
+1. Specified bulk email address
+2. Primary email address
+3. Any other email address
+
+
+## Tests are provided at different levels.
 
 - Unit tests check the logic of certain bits of the system. These can be run
   without CiviCRM or Mailchimp services.

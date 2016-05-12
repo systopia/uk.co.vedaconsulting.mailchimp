@@ -280,7 +280,11 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
         'contact_type' => 'Individual',
         'first_name' => $contact['first_name'],
         'last_name'  => $contact['last_name'],
-        'email'      => $email,
+        'api.Email.create' => [
+          'email'      => $email,
+          'is_bulkmail' => 1,
+          'is_primary' => 1,
+        ],
       ]);
     }
     $contact['contact_id'] = (int) $result['values'][0]['id'];
@@ -435,5 +439,67 @@ class MailchimpApiIntegrationBase extends \PHPUnit_Framework_TestCase {
     catch (CRM_Mailchimp_RequestErrorException $e) {
       $this->assertEquals(404, $e->response->http_code);
     }
+  }
+  /**
+   * Sugar function for adjusting fixture: uses CiviCRM API to add contact to
+   * the membership group.
+   *
+   * Used a lot in the tests.
+   *
+   * @param array $contact Set to static::$civicrm_contact_{1,2}
+   */
+  public function joinMembershipGroup($contact) {
+    return $this->joinGroup($contact, static::$civicrm_group_id_membership);
+  }
+  /**
+   * Sugar function for adjusting fixture: uses CiviCRM API to add contact to
+   * the group specified.
+   *
+   * Used a lot in the tests.
+   *
+   * @param array $contact Set to static::$civicrm_contact_{1,2}
+   * @param int   $group_id Set to
+   *              static::$civicrm_group_id_interest_{1,2}
+   */
+  public function joinGroup($contact, $group_id) {
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => $group_id,
+      'contact_id' => $contact['contact_id'],
+      'status' => "Added",
+    ]);
+    return $result;
+  }
+  /**
+   * Sugar function for adjusting fixture: uses CiviCRM API to 'remove' contact
+   * from the group specified.
+   *
+   * @param array $contact Set to static::$civicrm_contact_{1,2}
+   * @param int   $group_id Set to
+   *              static::$civicrm_group_id_interest_{1,2}
+   */
+  public function removeGroup($contact, $group_id) {
+    $result = civicrm_api3('GroupContact', 'create', [
+      'sequential' => 1,
+      'group_id' => $group_id,
+      'contact_id' => $contact['contact_id'],
+      'status' => "Removed",
+    ]);
+    return $result;
+  }
+  /**
+   * Sugar function for adjusting fixture: uses CiviCRM API to delete all
+   * GroupContact records between the contact and the group specified.
+   *
+   * @param array $contact Set to static::$civicrm_contact_{1,2}
+   * @param int   $group_id Set to
+   *              static::$civicrm_group_id_interest_{1,2}
+   */
+  public function deleteGroup($contact, $group_id) {
+    $result = civicrm_api3('GroupContact', 'delete', [
+      'group_id' => $group_id,
+      'contact_id' => $contact['contact_id'],
+    ]);
+    return $result;
   }
 }

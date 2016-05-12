@@ -336,4 +336,188 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
     $objectRef = [static::$civicrm_contact_1['contact_id'], 1];
     mailchimp_civicrm_post('create', 'GroupContact', $objectId=static::$civicrm_group_id_membership, $objectRef );
   }
+  /**
+   * Tests the selection of email address.
+   *
+   * 1. Check initial email is picked up.
+   * 2. Check that a bulk one is preferred, if exists.
+   * 3. Check that a primary one is used bulk is on hold.
+   * 4. Check that a primary one is used if no bulk one.
+   * 5. Check that secondary, not bulk, not primary one is NOT used.
+   * 6. Check that a not bulk, not primary one is used if all else fails.
+   * 7. Check contact not selected if all emails on hold
+   * 8. Check contact not selected if opted out
+   * 9. Check contact not selected if 'do not email' is set
+   * 10. Check contact not selected if deceased.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testCollectCiviUsesRightEmail() {
+
+    $subscriber_hash = static::$civicrm_contact_1['subscriber_hash'];
+
+    // Prepare the mock for the subscription the post hook will do.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->put("/lists/dummylistid/members/$subscriber_hash", Argument::any());
+    $this->joinMembershipGroup(static::$civicrm_contact_1);
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+
+    //
+    // Test 1:
+    //
+    $sync->collectCiviCrm('push');
+    // Should have one person in it.
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_1['email'], $dao->email);
+
+    //
+    // Test 2:
+    //
+    // Now add another email, this one is bulk.
+    // Nb. adding a bulk email removes the is_bulkmail flag from other email
+    // records.
+    $second_email = civicrm_api3('Email', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'email' => static::$civicrm_contact_2['email'],
+      'is_bulkmail' => 1,
+      'sequential' => 1,
+      ]);
+    if (empty($second_email['id'])) {
+      throw new Exception("Well this shouldn't happen. No Id for created email.");
+    }
+    $sync->collectCiviCrm('push');
+    // Should have one person in it.
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_2['email'], $dao->email);
+
+    //
+    // Test 3:
+    //
+    // Set the bulk one to on hold.
+    //
+    civicrm_api3('Email', 'create', ['id' => $second_email['id'], 'on_hold' => 1]);
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_1['email'], $dao->email);
+
+    //
+    // Test 4:
+    //
+    // Delete the bulk one; should now fallback to primary.
+    //
+    civicrm_api3('Email', 'delete', ['id' => $second_email['id']]);
+    $sync->collectCiviCrm('push');
+    // Should have one person in it.
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_1['email'], $dao->email);
+
+    //
+    // Test 5:
+    //
+    // Add a not bulk, not primary one. This should NOT get used.
+    //
+    $second_email = civicrm_api3('Email', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'email' => static::$civicrm_contact_2['email'],
+      'is_bulkmail' => 0,
+      'is_primary' => 0,
+      'sequential' => 1,
+      ]);
+    if (empty($second_email['id'])) {
+      throw new Exception("Well this shouldn't happen. No Id for created email.");
+    }
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_1['email'], $dao->email);
+
+    //
+    // Test 6:
+    //
+    // Check that an email is selected, even if there's no primary and no bulk.
+    //
+    // Find the primary email and delete it.
+    $result = civicrm_api3('Email', 'get', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'email' => static::$civicrm_contact_1['email'],
+      'api.Email.delete' => ['id' => '$value.id']
+    ]);
+
+    $sync->collectCiviCrm('push');
+    // Should have one person in it.
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+    $dao = CRM_Core_DAO::executeQuery("SELECT email FROM tmp_mailchimp_push_c");
+    $dao->fetch();
+    // Check email is what we'd expect.
+    $this->assertEquals(static::$civicrm_contact_2['email'], $dao->email);
+
+    //
+    // Test 7
+    //
+    // Check that if all emails are on hold, user is not selected.
+    //
+    civicrm_api3('Email', 'create', ['id' => $second_email['id'], 'on_hold' => 1]);
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+    //
+    // Test 8
+    //
+    // Check that even with a bulk, primary email, contact is not selected if
+    // they have opted out.
+    civicrm_api3('Email', 'create', ['id' => $second_email['id'],
+      'email' => static::$civicrm_contact_1['email'],
+      'on_hold' => 0,
+    ]);
+    civicrm_api3('Contact', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'is_opt_out' => 1,
+    ]);
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+
+    //
+    // Test 9
+    //
+    // Check that even with a bulk, primary email, contact is not selected if
+    // they have do_not_email
+    civicrm_api3('Contact', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'is_opt_out' => 0,
+      'do_not_email' => 1,
+    ]);
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+
+    //
+    // Test 10
+    //
+    // Check that even with a bulk, primary email, contact is not selected if
+    // they is_deceased
+    civicrm_api3('Contact', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'do_not_email' => 0,
+      'is_deceased' => 1,
+    ]);
+    $sync->collectCiviCrm('push');
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+  }
 }

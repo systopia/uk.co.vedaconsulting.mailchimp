@@ -251,23 +251,55 @@ class CRM_Mailchimp_Sync {
 
     // Use a nice API call to get the information for tmp_mailchimp_push_c.
     // The API will take care of smart groups.
-    $result = civicrm_api3('Contact', 'get', array(
+    $result = civicrm_api3('Contact', 'get', [
       'is_deleted' => 0,
-      // The email filter below does not work (CRM-18147)
+      // The email filter in comment below does not work (CRM-18147)
       // 'email' => array('IS NOT NULL' => 1),
       // Now I think that on_hold is NULL when there is no e-mail, so if
       // we are lucky, the filter below implies that an e-mail address
       // exists ;-)
-      'on_hold' => 0,
       'is_opt_out' => 0,
       'do_not_email' => 0,
+      'on_hold' => 0,
+      'is_deceased' => 0,
       'group' => $this->membership_group_id,
-      'return' => array('first_name', 'last_name', 'email_id', 'email', 'group'),
-      'options' => array('limit' => 0),
-    ));
+      'return' => ['first_name', 'last_name', 'group'],
+      'options' => ['limit' => 0],
+      'api.Email.get' => ['on_hold'=>0, 'return'=>'email,is_bulkmail'],
+    ]);
 
     // Loop contacts:
     foreach ($result['values'] as $contact) {
+      // Which email to use?
+      $email = NULL;
+      $other_emails = [];
+      foreach ($contact['api.Email.get']['values'] as $candidate_email) {
+        if ($candidate_email['is_bulkmail']) {
+          $email = $candidate_email['email'];
+          break;
+        }
+        if ($candidate_email['is_primary']) {
+          array_unshift($other_emails, $candidate_email['email']);
+          break;
+        }
+        else {
+          $other_emails []= $candidate_email['email'];
+        }
+      }
+      if (empty($email)) {
+        // Did not find a specific bulk email.
+        if ($other_emails) {
+          // First one is either primary, or there wasn't a primary(!) but there
+          // was something.
+          $email = reset($other_emails);
+        }
+        else {
+          // Hmmm. This contact has no emails.
+          continue;
+        }
+      }
+
+
       // Find out the ID's of the groups the $contact belongs to, and
       // save in $info.
       $info = $this->getComparableInterestsFromCiviCrmGroups($contact['groups'], $mode);
@@ -279,9 +311,9 @@ class CRM_Mailchimp_Sync {
       // we're ready to store this but we need a hash that contains all the info
       // for comparison with the hash created from the CiviCRM data (elsewhere).
       //          email,           first name,      last name,      groupings
-      $hash = md5($contact['email'] . $contact['first_name'] . $contact['last_name'] . $info);
+      $hash = md5($email . $contact['first_name'] . $contact['last_name'] . $info);
       // run insert prepared statement
-      $db->execute($insert, array($contact['id'], $contact['email'], $contact['first_name'], $contact['last_name'], $hash, $info));
+      $db->execute($insert, array($contact['id'], $email, $contact['first_name'], $contact['last_name'], $hash, $info));
     }
 
     // Tidy up.
