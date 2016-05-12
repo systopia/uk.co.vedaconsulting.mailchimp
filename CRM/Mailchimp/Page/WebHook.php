@@ -15,7 +15,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     if (CRM_Core_Config::singleton()->userPermissionClass->isModulePermissionSupported() && !CRM_Mailchimp_Permission::check('allow webhook posts')) {
       CRM_Core_Error::fatal();
     }
-	
+
     // Check the key
     // @todo is this a DOS attack vector? seems a lot of work for saying 403, go away, to a robot!
     if(!isset($_GET['key']) || $_GET['key'] != $my_key ) {
@@ -23,69 +23,84 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     }
 
     if (!empty($_POST['data']['list_id']) && !empty($_POST['type'])) {
-      $requestType = $_POST['type'];
-      $requestData = $_POST['data'];
-      // Return if API is set in webhook setting for lists
-      $list	      = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-      $webhookoutput  = $list->webhooks($requestData['list_id']);
-      if($webhookoutput[0]['sources']['api'] == 1) {
-	CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run API is set in Webhook setting for listID', $requestData['list_id'] );
-	return;      
+      $request_type = $_POST['type'];
+      $request_data = $_POST['data'];
+      $list_id = $request_data['list_id'];
+
+      $warnings = CRM_Mailchimp_Utils::configureList($list_id, $dry_run=TRUE);
+      if (!empty($warnings)) {
+        // The only time we ignore warnings are if there are multiple webhooks
+        // set. In this case we assume the user has some special requirements
+        // and has taken care to sort us out OK.
+        if (count($warnings) > 1 || substr($warnings[0], 'has more than one webhook configured') !== FALSE) {
+          // We have a config error and best not continue.
+          header('HTTP/1.1 500 Server Error');
+          CRM_Utils_System::civiExit();
+        }
       }
 
-      switch ($requestType) {
+
+      $api = CRM_Mailchimp_Utils::getMailchimpApi();
+      $result = $api->get("/lists/$list_id/webhooks")->data->webhooks;
+      $url = CRM_Mailchimp_Utils::getWebhookUrl();
+      // Find our webhook and check for a particularly silly configuration.
+      foreach ($result as $webhook) {
+        if ($webhook->url == $url) {
+          if ($webhook->sources->api) {
+            // To continue could cause a nasty loop.
+            header('HTTP/1.1 500 Server Error');
+            CRM_Utils_System::civiExit();
+          }
+        }
+      }
+
+      switch ($request_type) {
        case 'subscribe':
        case 'unsubscribe':
        case 'profile':
         // Create/Update contact details in CiviCRM
-        $delay = ( $requestType == 'profile' );
-        $contactID = CRM_Mailchimp_Utils::updateContactDetails($requestData['merges'], $delay);
-        $contactArray = array($contactID);
-
-          // Subscribe/Unsubscribe to related CiviCRM groups
-        self::manageCiviCRMGroupSubcription($contactID, $requestData, $requestType);
-		
-		      CRM_Mailchimp_Utils::checkDebug('Start - CRM_Mailchimp_Page_WebHook run $_POST= ', $_POST);
-          CRM_Mailchimp_Utils::checkDebug('Start - CRM_Mailchimp_Page_WebHook run $contactID= ', $contactID);
-          CRM_Mailchimp_Utils::checkDebug('Start - CRM_Mailchimp_Page_WebHook run $requestData= ', $requestData);
-          CRM_Mailchimp_Utils::checkDebug('Start - CRM_Mailchimp_Page_WebHook run $requestType= ', $requestType);
-          break;
+        $delay = ( $request_type == 'profile' );
+        $contact_id = CRM_Mailchimp_Utils::updateContactDetails($request_data['merges'], $delay);
+        $sync = new CRM_Mailchimp_Sync($list_id);
+        $sync->syncSingleContact($contact_id);
+        // self::manageCiviCRMGroupSubcription($contactID, $request_data, $request_type);
+        break;
 
       case 'upemail':
         // Mailchimp Email Update event
         // Try to find the email address
         $email = new CRM_Core_BAO_Email();
-        $email->get('email', $requestData['old_email']);
+        $email->get('email', $request_data['old_email']);
 
-        CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run- case upemail $requestData[old_email]= ', $requestData['old_email']);
+        CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run- case upemail $request_data[old_email]= ', $request_data['old_email']);
 
           // If the Email was found.
         if (!empty($email->contact_id)) {
-          $email->email = $requestData['new_email'];
+          $email->email = $request_data['new_email'];
           $email->save();
-            CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run- case upemail inside condition $requestData[new_email]= ', $requestData['new_email']);
+            CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run- case upemail inside condition $request_data[new_email]= ', $request_data['new_email']);
           }
         break;
       case 'cleaned':
         // Try to find the email address
         $email = new CRM_Core_BAO_Email();
-        $email->get('email', $requestData['email']);
+        $email->get('email', $request_data['email']);
 
-        CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run - case cleaned $requestData[new_email]= ', $requestData['email']);
+        CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run - case cleaned $request_data[new_email]= ', $request_data['email']);
           // If the Email was found.
         if (!empty($email->contact_id)) {
           $email->on_hold = 1;
           $email->holdEmail($email);
             $email->save();
             CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run - case cleaned inside condition $email= ', $email);
-            CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run - case cleaned inside condition $requestData[new_email]= ', $requestData['email']);
+            CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Page_WebHook run - case cleaned inside condition $request_data[new_email]= ', $request_data['email']);
           }
         break;
         default:
           // unhandled webhook
         CRM_Mailchimp_Utils::checkDebug('End- CRM_Mailchimp_Page_WebHook run $contactID= ', $contactID);
-        CRM_Mailchimp_Utils::checkDebug('End- CRM_Mailchimp_Page_WebHook run $requestData= ', $requestData);
-        CRM_Mailchimp_Utils::checkDebug('End- CRM_Mailchimp_Page_WebHook run $requestType= ', $requestType);
+        CRM_Mailchimp_Utils::checkDebug('End- CRM_Mailchimp_Page_WebHook run $request_data= ', $request_data);
+        CRM_Mailchimp_Utils::checkDebug('End- CRM_Mailchimp_Page_WebHook run $request_type= ', $request_type);
         CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook run $email= ', $email);
       }
     }
@@ -100,15 +115,15 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
   /*
    * Add/Remove contact from CiviCRM Groups mapped with Mailchimp List & Groups
    */
-  static function manageCiviCRMGroupSubcription($contactID = array(), $requestData , $action) {
+  static function manageCiviCRMGroupSubcription($contactID = array(), $request_data , $action) {
     CRM_Mailchimp_Utils::checkDebug('Start- CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $contactID= ', $contactID);
-    CRM_Mailchimp_Utils::checkDebug('Start- CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $requestData= ', $requestData);
-    CRM_Mailchimp_Utils::checkDebug('Start- CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $requestType= ', $action);
+    CRM_Mailchimp_Utils::checkDebug('Start- CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $request_data= ', $request_data);
+    CRM_Mailchimp_Utils::checkDebug('Start- CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $request_type= ', $action);
     
-    if (empty($contactID) || empty($requestData['list_id']) || empty($action)) {
+    if (empty($contactID) || empty($request_data['list_id']) || empty($action)) {
       return NULL;
     }
-    $listID = $requestData['list_id'];
+    $listID = $request_data['list_id'];
     $groupContactRemoves = $groupContactAdditions = array();
 
     // Deal with subscribe/unsubscribe.
@@ -128,7 +143,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
       $groupContactRemoves[$membershipGroupID][] = $contactID;
 	  
       $mcGroupings = array();
-      foreach (empty($requestData['merges']['GROUPINGS']) ? array() : $requestData['merges']['GROUPINGS'] as $grouping) {
+      foreach (empty($request_data['merges']['GROUPINGS']) ? array() : $request_data['merges']['GROUPINGS'] as $grouping) {
         foreach (explode(', ', $grouping['groups']) as $group) {
           $mcGroupings[$grouping['id']][$group] = 1;
         }
@@ -155,7 +170,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
      * Re-map to mcGroupings[grouping_id][group_name] = 1;
      */
     $mcGroupings = array();
-    foreach (empty($requestData['merges']['GROUPINGS']) ? array() : $requestData['merges']['GROUPINGS'] as $grouping) {
+    foreach (empty($request_data['merges']['GROUPINGS']) ? array() : $request_data['merges']['GROUPINGS'] as $grouping) {
       foreach (explode(', ', $grouping['groups']) as $group){
         $mcGroupings[$grouping['id']][$group] = 1;
       }
@@ -191,7 +206,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $groupContactRemoves ', $groupContactRemoves);
     CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $groupContactAdditions ', $groupContactAdditions);
     CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $contactID= ', $contactID);
-    CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $requestData= ', $requestData);
-    CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $requestType= ', $action);
+    CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $request_data= ', $request_data);
+    CRM_Mailchimp_Utils::checkDebug('End - CRM_Mailchimp_Page_WebHook manageCiviCRMGroupSubcription $request_type= ', $action);
   }
 }

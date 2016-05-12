@@ -786,4 +786,142 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
     $this->assertContains('Need to change webhook source api', $warnings[1]);
     $this->assertContains('Need to change webhook event subscribe', $warnings[2]);
   }
+  /**
+   * @depends testGetMCInterestGroupings
+   */
+  public function testGuessContactIdSingle() {
+
+    static::createTestContact(static::$civicrm_contact_1);
+    static::createTestContact(static::$civicrm_contact_2);
+    // Mock the API
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->put();
+    $api_prophecy->get();
+
+    //
+    // 1. unique email match.
+    //
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 2. email exists twice, but on the same contact
+    //
+    $second_email = civicrm_api3('Email', 'create', [
+      'contact_id' => static::$civicrm_contact_1['contact_id'],
+      'email' => static::$civicrm_contact_1['email'],
+      'is_billing' => 1,
+      'sequential' => 1,
+      ]);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 3. email exists multiple times, on multiple contacts
+    // but only one contact has the same last name.
+    //
+    // Give the second email to the 2nd contact.
+    $r = civicrm_api3('Email', 'create', [
+      'id' => $second_email['id'],
+      'contact_id' => static::$civicrm_contact_2['contact_id'],
+      'email' => static::$civicrm_contact_1['email'],
+      ]);
+    $c1 = static::$civicrm_contact_1;
+    $c2 = static::$civicrm_contact_2;
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 4. email exists multiple times, on multiple contacts with same last name
+    // but only one contact has the same first name.
+    //
+    // Rename second contact's last name
+    $r = civicrm_api3('Contact', 'create', [
+      'contact_id' => $c2['contact_id'],
+      'last_name'  => $c1['last_name'],
+      ]);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 5. email exists multiple times, on multiple contacts with same last name
+    // and first name. Returning *either* contact is OK.
+    //
+    // Rename second contact's first name
+    $r = civicrm_api3('Contact', 'create', [
+      'contact_id' => $c2['contact_id'],
+      'first_name'  => $c1['first_name'],
+      ]);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertContains($c, [$c1['contact_id'], $c2['contact_id']]);
+
+
+    //
+    // 6. email exists multiple times, on multiple contacts with same last name
+    // and first name. But only one contact is in the group.
+    //
+    $this->joinMembershipGroup($c1);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 7. email exists multiple times, on multiple contacts with same last name
+    // and first name and both contacts on the group.
+    //
+    $this->joinMembershipGroup($c2);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 8. email exists multiple times, on multiple contacts with same last name
+    // and different first names and both contacts on the group.
+    //
+    civicrm_api3('Contact', 'create', ['contact_id' => $c2['contact_id'], 'first_name'  => $c2['first_name']]);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+    //
+    // 9. email exists multiple times, on multiple contacts with same last name
+    // but there's one contact on the group with the wrong first name and one
+    // contact off the group with the right first name.
+    //
+    // It should go to the contact on the group.
+    //
+    // Remove contact 1 (has right names) from group, leaving contact 2.
+    $this->removeGroup($c1, static::$civicrm_group_id_membership);
+    civicrm_api3('Contact', 'create', ['contact_id' => $c2['contact_id'], 'first_name'  => $c2['first_name']]);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], static::$civicrm_contact_1['last_name']);
+    $this->assertEquals(static::$civicrm_contact_2['contact_id'], $c);
+
+
+    //
+    // 10. email exists multiple times, on multiple contacts not on the group
+    // and none of them has the right last name but one has right first name -
+    // should be picked.
+    //
+    // This is a grudge - we're just going on email and first name, which is not
+    // lots, but we really want to avoid not being able to match someone up as
+    // then we lose any chance of managing this contact/subscription.
+    //
+    // Remove contact 2 from group, none now on the group.
+    $this->removeGroup($c2, static::$civicrm_group_id_membership);
+    $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], static::$civicrm_contact_1['first_name'], 'thisnameiswrong');
+    $this->assertEquals(static::$civicrm_contact_1['contact_id'], $c);
+
+
+    //
+    // 10. email exists multiple times, on multiple contacts not on the group
+    // and none of them has the right last or first name
+    //
+    //
+    // Remove contact 2 from group, none now on the group.
+    try {
+      $c = $sync->guessContactIdSingle(static::$civicrm_contact_1['email'], 'wrongfirstname', 'thisnameiswrong');
+      $this->fail("Expected a CRM_Mailchimp_DuplicateContactsException to be thrown.");
+    }
+    catch (CRM_Mailchimp_DuplicateContactsException $e) {}
+
+  }
 }

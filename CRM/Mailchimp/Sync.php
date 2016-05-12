@@ -43,6 +43,9 @@ class CRM_Mailchimp_Sync {
         $this->membership_group_id = $group_id;
       }
     }
+    if (empty($this->membership_group_id)) {
+      throw new InvalidArgumentException("Failed to find mapped membership group for list '$list_id'");
+    }
     // Also cache without the membership group, i.e. interest groups only.
     $this->interest_group_details = $this->group_details;
     unset($this->interest_group_details[$this->membership_group_id]);
@@ -210,6 +213,129 @@ class CRM_Mailchimp_Sync {
         WHERE m.cid_guess IS NULL")->free();
   }
 
+  /**
+   * Identify a contact who is expected to be subscribed to this list.
+   *
+   * @param string $email
+   * @param string $first_name
+   * @param string $last_name
+   * @throw CRM_Mailchimp_DuplicateContactsException if the email is known bit
+   * it fails to identify one contact.
+   * @return int|null Contact Id if found.
+   */
+  public function guessContactIdSingle($email, $first_name=NULL, $last_name=NULL) {
+
+    // API call returns all matching emails, and all contacts attached to those
+    // emails IF the contact is in our group.
+    $result = civicrm_api3('Email', 'get', [
+      'sequential' => 1,
+      'email' => $email,
+      'api.Contact.get' => [
+        'group' => $this->membership_group_id,
+        'return' => "first_name,last_name"],
+    ]);
+
+    if ($result['count'] == 1) {
+      // If there's only one one match on this email anyway, then we can assume
+      // that's the person. (we make this assumption in
+      // guessContactIdsByUniqueEmail too.)
+      return $result['values'][0]['contact_id'];
+    }
+    if ($result['count'] == 0) {
+      // Never seen that email, mate.
+      return NULL;
+    }
+
+    // Now we're left with the case that the email matched more than once.
+    // Build some indexes.
+    $candidates = [];
+    $in_group = [];
+    foreach ($result['values'] as $candidate) {
+      if ($candidate['api.Contact.get']['count'] == 1) {
+        // This candidate is in the group.
+        $in_group[$candidate['contact_id']] = 1;
+      }
+      $candidates[$candidate['contact_id']] = $candidate;
+    }
+
+    if (count($candidates) == 1) {
+      // All emails belonged to the one contact.
+      return key($candidates);
+    }
+
+    // The email belongs to multiple contacts.
+    // If we have some in the group, start looking there.
+    if ($in_group) {
+      if (count($in_group) == 1) {
+        // There's only one contact with this email known to be in this group.
+        // That's enough certainty.
+        return key($in_group);
+      }
+      // There are multiple contacts that share the same email and are all in
+      // this group.
+      $candidates         = array_intersect_key($candidates, $in_group);
+    }
+    else {
+      // None of the contacts were in the group. Because of our API call this
+      // means we won't yet have names for these contacts so we'll grab those
+      // now.
+      $result = civicrm_api3('Email', 'get', [
+        'sequential' => 1,
+        'email' => $email,
+        'api.Contact.get' => [
+          'return' => "first_name,last_name"],
+      ]);
+
+      $candidates = [];
+      foreach ($result['values'] as $candidate) {
+        $candidates[$candidate['contact_id']] = $candidate;
+      }
+    }
+
+    // Make indexes on names.
+    $last_name_matches = $first_name_matches = [];
+    foreach ($candidates as $candidate) {
+      $c = $candidate['api.Contact.get']['values'][0];
+
+      if (!empty($c['first_name']) && ($first_name == $c['first_name'])) {
+        $first_name_matches[$candidate['contact_id']] = $candidate;
+      }
+      if (!empty($c['last_name']) && ($last_name == $c['last_name'])) {
+        $last_name_matches[$candidate['contact_id']] = $candidate;
+      }
+    }
+
+    // Now see if we can find them by name match.
+    if ($last_name_matches) {
+      // Some of the contacts have the same last name.
+      if (count($last_name_matches) == 1) {
+        // Only one contact with this email has the same last name, let's say
+        // it's them.
+        return key($last_name_matches);
+      }
+      // Multiple contacts with same last name. Reduce by same first name.
+      $last_name_matches = array_intersect_key($last_name_matches, $first_name_matches);
+      if (count($last_name_matches) > 0) {
+        // Either there was only one with same last and first name.
+        // Or, there were multiple contacts, but they have the same email and
+        // name so let's say that we're safe enough to pick the first one of
+        // them.
+        return key($last_name_matches);
+      }
+    }
+    // Last name didn't get there. Final chance. If the email and first name
+    // match a single contact, we'll grudgingly(!) say that's OK.
+    if (count($first_name_matches) == 1) {
+      // Only one contact with this email has the same first name, let's say
+      // it's them.
+      return key($first_name_matches);
+    }
+
+    // The email given belonged to several contacts and we were unable to narrow
+    // it down by the names, either. There's nothing we can do here, it's going
+    // to get messy.
+    throw new CRM_Mailchimp_DuplicateContactsException($candidates);
+  }
   /**
    * Collect CiviCRM data into temporary working table.
    *
