@@ -14,6 +14,14 @@ that interest group, e.g. a group that you identify with a smart group in
 CiviCRM. Typically such groups should be considered internal and therefore
 hidden from subscribers at all times.
 
+One of the challenges is to *identify the CiviCRM* contact that a mailchimp
+member matches. The code for this is centralised in
+`CRM_Mailchimp_Sync::guessContactIdSingle()`, which has tests at
+`MailchimpApiIntegrationMockTest::testGuessContactIdSingle()`. Look at the
+comment block for that test for details of how contats are identified. However,
+this is slow and so for the pull operation there's some SQL shortcuts for
+efficiency - see The "Pull Mailchimp to CiviCRM Sync for a list" heading below.
+
 ## About email selection.
 
 In order to be subscribed, the contact must:
@@ -211,3 +219,5 @@ However it also serves to check the mapped groups and lists are properly set up.
 Warnings are displayed on screen when these settings are wrong.
 
 These warnings are tested in `MailchimpApiIntegrationMockTest::testCheckGroupsConfig()`.
+
+

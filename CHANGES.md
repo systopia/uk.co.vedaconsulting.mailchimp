@@ -64,3 +64,49 @@ are correct at Mailchimp.
 ## Mailchimp Settings Page
 
 Checks all lists including a full check on the webhook config.
+
+## Changes of email from Mailchimp's 'upemail' webhook 
+
+Previously we found the first email match from the email table and changed that.
+This does not allow for the same email being in the table multiple times.
+
+This *should* only happen to people we know are subscribed to the list. Also,
+there's the case that a user has a primary email of personal@example.com and
+wanted to change it at Mailchimp to mybulkmail@example.com.
+
+So now what we do is:
+
+1. find the email. Filter for contacts we know to be subscribed.
+
+2. if this *is* their bulk email, just change it.
+
+3. if it's *not* their bulk email, do they have a bulk email?
+
+   Yes: change that.
+   No:  create that with the new email.
+
+Ideally we'd have staff notified to check the emails, possibly in the 3:No case,
+set the email to on hold. But without further human interaction it's safest to
+do as outlined above.
+
+The upemail will change *all* emails found, not just the first, so long as they
+belong to a single contact on the list. So if the email is in CiviCRM against a
+different contact who is not in the mailchimp list, that will be left unchanged.
+
+## Changes to response to Mailchimp's 'cleaned' webhook
+
+Previously the first matching was found and put on hold.
+
+Cleaned comes in two flavours: hard (email keeps bouncing) and abuse (they don't
+like you anymore).
+
+If the email is bouncing for mailchimp, in all their deliverability might, it's
+almost definitely going to bounce for us. So in this case we put all matching
+emails on hold.
+
+In the case of 'abuse' we limit the action to email(s) belonging to contacts on
+this list only, since it might be to do with that list.
+
+
+
+

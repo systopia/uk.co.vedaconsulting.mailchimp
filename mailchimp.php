@@ -439,6 +439,11 @@ function mailchimp_civicrm_navigationMenu(&$params){
  * @link http://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_post
  */
 function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
+
+  if (!CRM_Mailchimp_Utils::$post_hook_enabled) {
+    // Post hook is disabled at this point in the running.
+    return;
+  }
 	
 	/***** NO BULK EMAILS (User Opt Out) *****/
 	if ($objectName == 'Individual' || $objectName == 'Organization' || $objectName == 'Household') {
@@ -477,19 +482,6 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 		
     if ($op == 'view') {
       // Nothing changed; nothing to do.
-      return;
-    }
-
-    // FIXME: Dirty hack to skip hook in the case that a Pull from mailchimp has
-    // just happened, which will be changing CiviCRM group memberships.
-    // Nb. this is probably mitigated now since we restrict the action of this
-    // hook to when changes are made on a single contact, but there's still the
-    // case that the pull might add/remove one person.
-		require_once 'CRM/Core/Session.php';
-    $session = CRM_Core_Session::singleton();
-    $skipPostHook = $session->get('skipPostHook');
-		if (!empty($skipPostHook)) {
-      // In middle of a Pull. Don't do anything.
       return;
     }
 

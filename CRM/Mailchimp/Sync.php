@@ -4,6 +4,11 @@
  * This class holds all the sync logic for a particular list.
  */
 class CRM_Mailchimp_Sync {
+  /**
+   * Holds the Mailchimp List ID.
+   *
+   * This is accessible read-only via the __get().
+   */
   protected $list_id;
   /**
    * Cache of details from CRM_Mailchimp_Utils::getGroupsToSync.
@@ -49,6 +54,18 @@ class CRM_Mailchimp_Sync {
     // Also cache without the membership group, i.e. interest groups only.
     $this->interest_group_details = $this->group_details;
     unset($this->interest_group_details[$this->membership_group_id]);
+  }
+  /**
+   * Getter.
+   */
+  public function __get($property) {
+    switch ($property) {
+    case 'list_id':
+    case 'membership_group_id':
+    case 'interest_group_details':
+      return $this->$property;
+    }
+    throw new InvalidArgumentException("'$property' property inaccessible or unknown");
   }
   /**
    * Collect Mailchimp data into temporary working table.
@@ -216,14 +233,22 @@ class CRM_Mailchimp_Sync {
   /**
    * Identify a contact who is expected to be subscribed to this list.
    *
+   * This is used in a couple of cases, for finding a contact from incomming
+   * data for:
+   * - a possibly new contact, 
+   * - a contact that is expected to be in this membership group.
+   *
    * @param string $email
-   * @param string $first_name
-   * @param string $last_name
+   * @param string|null $first_name
+   * @param string|null $last_name
+   * @param bool $must_be_on_list    If TRUE, only return an ID if this contact
+   *                                 is known to be on the list. defaults to
+   *                                 FALSE. 
    * @throw CRM_Mailchimp_DuplicateContactsException if the email is known bit
    * it fails to identify one contact.
    * @return int|null Contact Id if found.
    */
-  public function guessContactIdSingle($email, $first_name=NULL, $last_name=NULL) {
+  public function guessContactIdSingle($email, $first_name=NULL, $last_name=NULL, $must_be_on_list=FALSE) {
 
     // API call returns all matching emails, and all contacts attached to those
     // emails IF the contact is in our group.
@@ -236,6 +261,14 @@ class CRM_Mailchimp_Sync {
     ]);
 
     if ($result['count'] == 1) {
+      // The email is only in the database once.
+      if ($must_be_on_list) {
+        // We need to check the contact.
+        if ($result['values'][0]['api.Contact.get']['count'] != 1) {
+          // This email belongs to a contact *not* in the group.
+          return NULL;
+        }
+      }
       // If there's only one one match on this email anyway, then we can assume
       // that's the person. (we make this assumption in
       // guessContactIdsByUniqueEmail too.)
@@ -246,8 +279,8 @@ class CRM_Mailchimp_Sync {
       return NULL;
     }
 
-    // Now we're left with the case that the email matched more than once.
-    // Build some indexes.
+    // Now we're left with the case that the email matched more than one
+    // different contact. Build some indexes.
     $candidates = [];
     $in_group = [];
     foreach ($result['values'] as $candidate) {
@@ -272,11 +305,16 @@ class CRM_Mailchimp_Sync {
         return key($in_group);
       }
       // There are multiple contacts that share the same email and are all in
-      // this group.
-      $candidates         = array_intersect_key($candidates, $in_group);
+      // this group. Narrow our serach to just those in the group.
+      $candidates = array_intersect_key($candidates, $in_group);
     }
     else {
-      // None of the contacts were in the group. Because of our API call this
+      // None of the contacts were in the group.
+      if ($must_be_on_list) {
+        // If we're insisting on that, then we can jump ship now.
+        return NULL;
+      }
+      // Because of our API call this
       // means we won't yet have names for these contacts so we'll grab those
       // now.
       $result = civicrm_api3('Email', 'get', [
@@ -560,6 +598,44 @@ class CRM_Mailchimp_Sync {
   }
 
   /**
+   * Convert a 'groups' string as provided by Mailchimp's Webhook request API to
+   * an array of CiviCRM group ids.
+   *
+   * Nb. a Mailchimp webhook is the equivalent of a 'pull' operation so we
+   * ignore any groups that Mailchimp is not allowed to update.
+   *
+   * @param string $groups as returned by Mailchimp's merges.INTERESTS request
+   * data.
+   * @return array of interest_ids to booleans.
+   */
+  public function splitMailchimpWebhookGroupsToCiviGroupIds($group_input) {
+
+    // Create a map of Mailchimp interest names to Civi Groups.
+    $map = [];
+    foreach ($this->interest_group_details as $group_id => $details) {
+      if ($details['is_mc_update_grouping'] == 1) {
+        // This group is configured to allow updates from Mailchimp to CiviCRM.
+        $map[$details['interest_name']] = $group_id;
+      }
+    }
+    // Sort longest strings first.
+    uksort($map, function($a, $b) { return strlen($a) - strlen($b); });
+
+    // Remove the found titles longest first.
+    $groups = [];
+    $group_input = ",$group_input,";
+    foreach ($map as $interest_name => $civi_group_id) {
+      $i = strpos($group_input, ",$interest_name,");
+      if ($i !== FALSE) {
+        $groups[] = $civi_group_id;
+        // Remove this from the string.
+        $group_input = substr($group_input, 0, $i+1) . substr($group_input, $i + strlen(",$interest_group_details,"));
+      }
+    }
+
+    return $groups;
+  }
+  /**
    * "Push" sync.
    *
    * Sends additions, edits (compared to tmp_mailchimp_push_m), deletions.
@@ -678,6 +754,10 @@ class CRM_Mailchimp_Sync {
    *
    */
   public function updateCiviFromMailchimp() {
+
+    // Ensure posthooks don't trigger while we make GroupContact changes.
+    CRM_Mailchimp_Utils::$post_hook_enabled = FALSE;
+
     $changes = ['removals' => [], 'additions' => []];
 
     // all Mailchimp table
@@ -714,13 +794,43 @@ class CRM_Mailchimp_Sync {
         }
       }
       else {
-        // We don't know yet who this is.
-        // Update/create contact.
-        $params = ['FNAME' => $dao->first_name, 'LNAME' => $dao->last_name, 'EMAIL' => $dao->email];
-        $contact_id = CRM_Mailchimp_Utils::updateContactDetails($params);
+        // We don't know yet who this is. Check the slow way.
+
+        try {
+          $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
+          if ($contact_id) {
+            // Contact found.
+            $result = civicrm_api3('Contact', 'getsingle', ['contact_id' => $contact_id]);
+            $edits = static::updateCiviFromMailchimpContactLogic(
+              ['first_name' => $dao->first_name, 'last_name' => $dao->last_name],
+              $result);
+            if ($edits) {
+              // Name updates required.
+              $result = civicrm_api3('Contact', 'create', ['contact_id' => $contact_id] + $edits);
+            }
+          }
+          else {
+            // Contact does not exist, create a new one.
+            $result = civicrm_api3('Contact', 'create', [
+              'contact_type' => 'Individual',
+              'first_name'   => $dao->first_name,
+              'last_name'    => $dao->last_name,
+              'email'        => $dao->email,
+              'sequential'   => 1,
+              ]);
+            $contact_id = $result['values'][0]['contact_id'];
+          }
+        }
+        catch (CRM_Mailchimp_DuplicateContactsException $e) {
+          // We have absolutely failed to identify this subscriber and there's
+          // nothing we can do about it.
+          $contact_id = null; 
+        }
+
         if(!$contact_id) {
-          // We failed to identify the contact.
+          // We failed to identify/create the contact.
           // Move on to the next record, nothing we can do here.
+          // @todo have some way to report.
           continue;
         }
       }
@@ -745,7 +855,7 @@ class CRM_Mailchimp_Sync {
         // not in the membership group. (actually they could have an email
         // problem as well, but that's OK). Add them into the membership group.
         $changes['additions'][$this->membership_group_id][] = $contact_id;
-                      
+
         // Set interests empty.
         $civi_interests = array();
       }
@@ -781,11 +891,6 @@ class CRM_Mailchimp_Sync {
     // Log group contacts which are going to be added/removed to/from CiviCRM
     CRM_Core_Error::debug_var( 'Mailchimp $changes= ', $changes);
 
-    // FIXME: dirty hack setting a variable in session to skip post hook
-		require_once 'CRM/Core/Session.php';
-    $session = CRM_Core_Session::singleton();
-    $session->set('skipPostHook', 'yes');
-
     if ($changes['additions']) {
       // We have some contacts to add into groups...
       foreach($changes['additions'] as $groupID => $contactIDs) {
@@ -799,8 +904,9 @@ class CRM_Mailchimp_Sync {
         CRM_Contact_BAO_GroupContact::removeContactsFromGroup($contactIDs, $groupID, 'Admin', 'Removed');
       }
     }
-    // FIXME: unset variable in session
-		$session->set('skipPostHook', '');
+
+    // Re-enable the post hooks.
+    CRM_Mailchimp_Utils::$post_hook_enabled = FALSE;
   }
   /**
    * Logic to determine update needed for pull.
@@ -809,9 +915,9 @@ class CRM_Mailchimp_Sync {
    * can be tested more easily.
    *
    * @param array $mailchimp_details Array of mailchimp details from
-   * tmp_mailchimp_push_m
+   * tmp_mailchimp_push_m, with keys first_name, last_name
    * @param array $civi_details Array of civicrm details from
-   * tmp_mailchimp_push_c
+   * tmp_mailchimp_push_c, with keys first_name, last_name
    * @return array changes in format required by Mailchimp API.
    */
   public static function updateCiviFromMailchimpContactLogic($mailchimp_details, $civi_details) {
@@ -920,6 +1026,8 @@ class CRM_Mailchimp_Sync {
   /**
    * Sync a single contact's membership and interests for this list from their
    * details in CiviCRM.
+   *
+   * @todo rename as push
    */
   public function syncSingleContact($contact_id) {
 

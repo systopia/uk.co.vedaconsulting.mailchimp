@@ -853,32 +853,6 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(404, $e->response->http_code);
     }
   }
-  /**
-   * Assert that a contact exists in the given CiviCRM group.
-   */
-  public function assertContactIsInGroup($contact_id, $group_id) {
-    $result = civicrm_api3('Contact', 'getsingle', ['group' => $this->membership_group_id, 'id' => $contact_id]);
-    $this->assertEquals($contact_id, $result['contact_id']);
-  }
-  /**
-   * Assert that a contact does not exist in the given CiviCRM group.
-   */
-  public function assertContactIsNotInGroup($contact_id, $group_id, $msg=NULL) {
-
-    // Fetching the contact should work.
-    $result = civicrm_api3('Contact', 'getsingle', ['id' => $contact_id]);
-    try {
-      // ...But not if we filter for this group.
-      $result = civicrm_api3('Contact', 'getsingle', ['group' => $group_id, 'id' => $contact_id]);
-      if ($msg === NULL) {
-        $msg = "Contact '$contact_id' should not be in group '$group_id', but is.";
-      }
-      $this->fail($msg);
-    }
-    catch (CiviCRM_API3_Exception $e) {
-      $x=1;
-    }
-  }
 }
 
 //

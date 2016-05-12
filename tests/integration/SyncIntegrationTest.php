@@ -1,10 +1,16 @@
 <?php
 /**
  * @file
- * These tests do not depend on the Mailchimp API.
+ * Tests of CRM_Mailchimp_Sync methods that do not need the Mailchimp API.
  *
- * It does not depend on a live Mailchimp account. However it is not a unit test
- * because it does depend on and make changes to the CiviCRM database.
+ * It does not depend on a live Mailchimp account and nor does it need a mock
+ * mailchimp api object - these methods don't use the Mailchimp API anyway.
+ * However it is not a unit test because it does depend on and make changes to
+ * the CiviCRM database.
+ *
+ * The CRM_Mailchimp_Sync class is also tested in:
+ * - MailchimpApiIntegrationMockTest
+ * - MailchimpApiIntegrationTest
  *
  */
 require 'integration-test-bootstrap.php';

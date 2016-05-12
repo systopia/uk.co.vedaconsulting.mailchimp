@@ -8,6 +8,17 @@ class CRM_Mailchimp_Utils {
   static protected $mailchimp_api;
 
   /**
+   * Checked by mailchimp_civicrm_post before it acts on anything.
+   *
+   * That post hook might send requests to Mailchimp's API, but in the cases
+   * where we're responding to data from Mailchimp, this could possibly result
+   * in a loop, so we have a central on/off switch here.
+   *
+   * In previous versions it was a session variable, but this is not necessary.
+   */
+  public static $post_hook_enabled = TRUE;
+
+  /**
    * Split a string of group titles into an array of groupIds.
    *
    * The Contact:get API is the only place you can get a list of all the groups
@@ -33,6 +44,7 @@ class CRM_Mailchimp_Utils {
    * you request the 'group' output (which comes in a key called 'groups').
    * @param array $group_details As from CRM_Mailchimp_Utils::getGroupsToSync
    * but only including groups you're interested in.
+   * @return array CiviCRM groupIds.
    */
   static function splitGroupTitles($group_titles, $group_details) {
     $groups = [];
@@ -575,67 +587,6 @@ class CRM_Mailchimp_Utils {
   
 
 
-  /**
-   * Create/Update contact details in CiviCRM, based on the data from Mailchimp webhook
-   */
-  static function updateContactDetails(&$params, $delay = FALSE) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils updateContactDetails $params', $params);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils updateContactDetails $delay', $delay);
-
-    if (empty($params)) {
-      return NULL;
-    }
-    $params['status'] = array('Added' => 0, 'Updated' => 0);
-    $contactParams = 
-        array(
-          'version'       => 3,
-          'contact_type'  => 'Individual',
-          'first_name'    => $params['FNAME'],
-          'last_name'     => $params['LNAME'],
-          'email'         => $params['EMAIL'],
-        );
-     
-    if($delay){
-      //To avoid a new duplicate contact to be created as both profile and
-      //upemail events are happening at the same time
-      sleep(20);
-    }
-    $contactids = CRM_Mailchimp_Utils::getContactFromEmail($params['EMAIL']);
-    
-    if(count($contactids) > 1) {
-       CRM_Core_Error::debug_log_message( 'Mailchimp Pull/Webhook: Multiple contacts found for the email address '. print_r($params['EMAIL'], true), $out = false );
-       return NULL;
-    }
-    if(count($contactids) == 1) {
-      $contactParams  = CRM_Mailchimp_Utils::updateParamsExactMatch($contactids, $params);
-      $params['status']['Updated']  = 1;
-    }
-    if(empty($contactids)) {
-      //check for contacts with no primary email address
-      $id  = CRM_Mailchimp_Utils::getContactFromEmail($params['EMAIL'], FALSE);
-
-      if(count($id) > 1) {
-        CRM_Core_Error::debug_log_message( 'Mailchimp Pull/Webhook: Multiple contacts found for the email address which is not primary '. print_r($params['EMAIL'], true), $out = false );
-        return NULL;
-      }
-      if(count($id) == 1) {
-        $contactParams  = CRM_Mailchimp_Utils::updateParamsExactMatch($id, $params);
-        $params['status']['Updated']  = 1;
-      }
-      // Else create new contact
-      if(empty($id)) {
-        $params['status']['Added']  = 1;
-      }
-      
-    }
-    // Create/Update Contact details
-    $contactResult = civicrm_api('Contact' , 'create' , $contactParams);
-
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils updateContactDetails $contactID', $contactResult['id']);
-
-    return $contactResult['id'];
-  }
-  
   static function getContactFromEmail($email, $primary = TRUE) {
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getContactFromEmail $email', $email);
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getContactFromEmail $primary', $primary);
