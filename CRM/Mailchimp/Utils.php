@@ -55,6 +55,24 @@ class CRM_Mailchimp_Utils {
     return $groups;
   }
   /**
+   * Returns the webhook URL.
+   */
+  static function getWebhookUrl() {
+    $security_key = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'security_key', NULL, FALSE);
+    if (empty($security_key)) {
+      // @Todo what exception should this throw?
+      throw new InvalidArgumentException("You have not set a security key for your Mailchimp integration. Please do this on the settings page at civicrm/mailchimp/settings");
+    }
+    $webhook_url = CRM_Utils_System::url('civicrm/mailchimp/webhook',
+      $query = 'reset=1&key=' . urlencode($security_key),
+      $absolute = TRUE,
+      $fragment = NULL,
+      $htmlize = FALSE,
+      $fronteend = TRUE);
+
+    return $webhook_url;
+  }
+  /**
    * Returns an API class for talking to Mailchimp.
    *
    * This is a singleton pattern with a factory method to create an object of
@@ -94,6 +112,162 @@ class CRM_Mailchimp_Utils {
     return $mcClient;
   }
 
+  /**
+   * Check all mapped groups' lists.
+   *
+   * Nb. this does not output anything itself so we can test it works. It is
+   * used by the settings page.
+   *
+   * @param null|Array $groups array of membership groups to check, or NULL to
+   *                   check all.
+   *              
+   * @return Array of message strings that should be output with CRM_Core_Error
+   * or such.
+   *
+   */
+  public static function checkGroupsConfig($groups=NULL) {
+    if ($groups === NULL) {
+      $groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), null, $membership_only = TRUE);
+    }
+    if (!is_array($groups)) {
+      throw new InvalidArgumentException("expected array argument, if provided");
+    }
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+
+    $warnings = [];
+    // Check all our groups do not have the sources:API set in the webhook, and
+    // that they do have the webhook set.
+    foreach ($groups as $group_id => $details) {
+
+      $group_settings_link = "<a href='/civicrm/group?reset=1&action=update&id=$group_id' >"
+        . htmlspecialchars($details['civigroup_title']) . "</a>";
+
+      $message_prefix = ts('CiviCRM group "%1" (Mailchimp list %2): ',
+        [1 => $group_settings_link, 2 => $details['list_id']]);
+
+      try {
+        $test_warnings = CRM_Mailchimp_Utils::configureList($details['list_id'], $dry_run=TRUE);
+        foreach ($test_warnings as $_) {
+          $warnings []= $message_prefix . $_;
+        }
+      }
+      catch (CRM_Mailchimp_NetworkErrorException $e) {
+        $warnings []= $message_prefix . ts("Problems (possibly temporary) fetching details from Mailchimp. ") . $e->getMessage();
+      }
+      catch (CRM_Mailchimp_RequestErrorException $e) {
+        $message = $e->getMessage();
+        if ($e->response->http_code == 404) {
+          // A little more helpful than "resource not found".
+          $warnings []= $message_prefix . ts("The Mailchimp list that this once worked with has "
+            ."been deleted on Mailchimp. Please edit the CiviCRM group settings to "
+            ."either specify a different Mailchimp list that exists, or to remove "
+            ."the Mailchimp integration for this group.");
+        }
+        else {
+          $warnings []= $message_prefix . ts("Problems fetching details from Mailchimp. ") . $e->getMessage();
+        }
+      }
+    }
+
+    if ($warnings) {
+      CRM_Core_Error::debug_log_message('Mailchimp list check warnings' . var_export($warnings,1));
+    }
+    return $warnings;
+  }
+  /**
+   * Configure webhook with Mailchimp.
+   *
+   * Returns a list of messages to display to the user.
+   *
+   * @param string $list_id Mailchimp List Id.
+   * @param bool $dry_run   If set no changes are made.
+   * @return array
+   */
+  public static function configureList($list_id, $dry_run = FALSE) {
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $expected = [
+      'url' => CRM_Mailchimp_Utils::getWebhookUrl(),
+      'events' => [
+        'subscribe' => TRUE,
+        'unsubscribe' => TRUE,
+        'profile' => TRUE,
+        'cleaned' => TRUE,
+        'upemail' => TRUE,
+        'campaign' => FALSE,
+      ],
+      'sources' => [
+        'user' => TRUE,
+        'admin' => TRUE,
+        'api' => FALSE,
+      ],
+    ];
+    $verb = $dry_run ? 'Need to change ' : 'Changed ';
+    try {
+      $result = $api->get("/lists/$list_id/webhooks");
+      $webhooks = $result->data->webhooks;
+      //$webhooks = $api->get("/lists/$list_id/webhooks")->data->webhooks;
+
+      if (empty($webhooks)) {
+        $messages []= ts(($dry_run ? 'Need to create' : 'Created') .' a webhook at Mailchimp');
+      }
+      else {
+        // Existing webhook(s) - check thoroughly.
+        if (count($webhooks) > 1) {
+          // Unusual case, leave it alone.
+          $messages [] = "Mailchimp list $list_id has more than one webhook configured. This is unusual, and so CiviCRM has not made any changes. Please ensure the webhook is set up correctly.";
+          return $messages;
+        }
+
+        // Got a single webhook, check it looks right.
+        $messages = [];
+        // Correct URL?
+        if ($webhooks[0]->url != $expected['url']) {
+          $messages []= ts($verb . 'webhook URL from %1 to %2', [1 => $webhooks[0]->url, 2 => $expected['url']]);
+        }
+        // Correct sources?
+        foreach ($expected['sources'] as $source => $expected_value) {
+          if ($webhooks[0]->sources->$source != $expected_value) {
+            $messages []= ts($verb . 'webhook source %1 from %2 to %3', [1 => $source, 2 => (int) $webhooks[0]->sources->$source, 3 => (int)$expected_value]);
+          }
+        }
+        // Correct events?
+        foreach ($expected['events'] as $event => $expected_value) {
+          if ($webhooks[0]->events->$event != $expected_value) {
+            $messages []= ts($verb . 'webhook event %1 from %2 to %3', [1 => $event, 2 => (int) $webhooks[0]->events->$event, 3 => (int) $expected_value]);
+          }
+        }
+
+        if (empty($messages)) {
+          // All fine.
+          return;
+        }
+
+        if (!$dry_run) {
+          // As of May 2016, there doesn't seem to be an update method for
+          // webhooks, so we just delete this and add another.
+          $api->delete("/lists/$list_id/webhooks/" . $webhooks[0]->id);
+        }
+      }
+      if (!$dry_run) {
+        // Now create the proper one.
+        $result = $api->post("/lists/$list_id/webhooks", $expected);
+      }
+
+    }
+    catch (CRM_Mailchimp_RequestErrorException $e) {
+      if ($e->request->method == 'GET' && $e->response->http_code == 404) {
+        $messages [] = ts("The Mailchimp list that this once worked with has been deleted");
+      }
+      else {
+        $messages []= ts("Problems updating or fetching from Mailchimp. Please manually check the configuration. ") . $e->getMessage();
+      }
+    }
+    catch (CRM_Mailchimp_NetworkErrorException $e) {
+      $messages []= ts("Problems (possibly temporary) talking to Mailchimp. ") . $e->getMessage();
+    }
+
+    return $messages;
+  }
   /**
    * Look up an array of CiviCRM groups linked to Maichimp groupings.
    *
@@ -336,7 +510,7 @@ class CRM_Mailchimp_Utils {
     return $mapper[$listID];
   }
 
-  /*
+  /**
    * Get Mailchimp group ID group name
    */
   static function getMailchimpGroupIdFromName($listID, $groupName) {
@@ -401,7 +575,7 @@ class CRM_Mailchimp_Utils {
   
 
 
-  /*
+  /**
    * Create/Update contact details in CiviCRM, based on the data from Mailchimp webhook
    */
   static function updateContactDetails(&$params, $delay = FALSE) {
@@ -511,7 +685,7 @@ class CRM_Mailchimp_Utils {
 
     return $contactParams;
   }
-  /*
+  /**
    * Function to get the associated CiviCRM Groups IDs for the Grouping array
    * sent from Mialchimp Webhook.
    *
@@ -554,7 +728,7 @@ class CRM_Mailchimp_Utils {
     return $civiGroups;
   }
 
-  /*
+  /**
    * Function to get CiviCRM Groups for the specific Mailchimp list in which the Contact is Added to
    */
   static function getGroupSubscriptionforMailchimpList($listID, $contactID) {
@@ -671,7 +845,7 @@ class CRM_Mailchimp_Utils {
     return FALSE;
   }
   
-  /*
+  /**
    * Function to subscribe/unsubscribe civicrm contact in Mailchimp list
 	 *
 	 * $groupDetails - Array

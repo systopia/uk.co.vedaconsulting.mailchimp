@@ -136,7 +136,9 @@ function mailchimp_civicrm_alterSettingsFolders(&$metaDataFolders = NULL) {
 }
 
 /**
- * Implementation of hook_civicrm_buildForm
+ * Implementation of hook_civicrm_buildForm.
+ *
+ * Alter the group settings form to add in our offer of Mailchimp integration.
  *
  * @link http://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_buildForm
  */
@@ -162,10 +164,13 @@ function mailchimp_civicrm_buildForm($formName, &$form) {
 
       $options = array(
         ts('No integration'),
-        ts('Sync membership of this group with membership of a Mailchimp List'),
-        ts('Sync membership of with a Mailchimp interest grouping')
+        ts('Membership Sync: Contacts in this group should be subscribed to a Mailchimp List'),
+        ts('Interest Sync: Contacts in this group should have an "interest" set at Mailchimp')
       );
       $form->addRadio('mc_integration_option', '', $options, NULL, '<br/>');
+
+      $form->addElement('checkbox', 'mc_fixup',
+        ts('Ensure list\'s webhook settings are correct at Mailchimp when saved.'));
 
       // Prepopulate details if 'edit' action
       $groupId = $form->getVar('_id');
@@ -173,6 +178,7 @@ function mailchimp_civicrm_buildForm($formName, &$form) {
 
         $mcDetails  = CRM_Mailchimp_Utils::getGroupsToSync(array($groupId));
 
+        $defaults['mc_fixup'] = 1;
         if (!empty($mcDetails)) {
           $defaults['mailchimp_list'] = $mcDetails[$groupId]['list_id'];
           $defaults['is_mc_update_grouping'] = $mcDetails[$groupId]['is_mc_update_grouping'];
@@ -262,6 +268,28 @@ function mailchimp_civicrm_validateForm( $formName, &$fields, &$files, &$form, &
             }
           }
         }
+      }
+    }
+  }
+}
+/**
+ * When the group settings form is saved, configure the mailchimp list if
+ * appropriate.
+ *
+ * Implements hook_civicrm_postProcess($formName, &$form)
+ *
+ * @link https://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_postProcess
+ */
+function mailchimp_civicrm_postProcess($formName, &$form) {
+  if ($formName == 'CRM_Group_Form_Edit') {
+    $vals = $form->_submitValues;
+    if (!empty($vals['mc_fixup']) && !empty($vals['mailchimp_list'])
+      && !empty($vals['mc_integration_option']) && $vals['mc_integration_option']>0) {
+      // This group is supposed to have Mailchimp integration and the user wants
+      // us to check the Mailchimp list is properly configured.
+      $messages = CRM_Mailchimp_Utils::configureList($vals['mailchimp_list']);
+      foreach ($messages as $message) {
+        CRM_Core_Session::setStatus($message);
       }
     }
   }

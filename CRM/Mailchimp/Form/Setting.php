@@ -63,54 +63,15 @@ class CRM_Mailchimp_Form_Setting extends CRM_Core_Form {
         'name' => ts('Save & Test'),
       ),
     );
-    $groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), null, $membership_only = TRUE);
 
-    // Check all our groups do not have the sources:API set in the webhook, and
-    // that they do have the webhook set.
-    foreach ($groups as $group_id => $details) {
-
-      $group_settings_link = "<a href='/civicrm/group?reset=1&action=update&id=$group_id' >"
-        . htmlspecialchars($details['civigroup_title']) . "</a>";
-
-      try {
-        $response = CRM_Mailchimp_Utils::getMailchimpApi()->get("/lists/$details[list_id]/webhooks");
-        if (empty($response->data->webhooks)) {
-          throw new UnexpectedValueException('This list does not have the required webhooks configured at the Mailchimp end. Please do this.');
-        }
-        if ($response->data->webhooks[0]->sources->api) {
-          CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Setting - API is set in Webhook setting for listID and it should not be - risk of recusion!', $details['list_id']);
-          throw new UnexpectedValueException('"API" must NOT be listed in the "sources" settings for the webhook - please reconfigure the webhook on Mailchimp ASAP to avoid trouble.');
-        }
-      }
-      catch (CRM_Mailchimp_NetworkErrorException $e) {
-        CRM_Core_Session::setStatus(
-          ts('Error fetching details for CiviCRM group %1 (Mailchimp list %2): %3',
-            [1 => $group_settings_link, 2 => $details['list_id'], 3 => $e->getMessage()]),
-          ts('Error'), 'error');
-      }
-      catch (CRM_Mailchimp_RequestErrorException $e) {
-        $message = $e->getMessage();
-        if ($e->response->http_code == 404) {
-          // A little more helpful than "resource not found".
-          $message = "The Mailchimp list that %1 once worked with has
-            been deleted on Mailchimp. Please edit the CiviCRM group settings to
-            either specify a different Mailchimp list that exists, or to remove
-            the Mailchimp integration for this group.";
-        }
-        CRM_Core_Session::setStatus(
-          ts('Error fetching details for CiviCRM group %1 (Mailchimp list %2): %3',
-            [1 => $group_settings_link, 2 => $details['list_id'], 3 => $e->getMessage()]),
-          ts('Error'), 'error');
-      }
-      catch (UnexpectedValueException $e) {
-        CRM_Core_Session::setStatus(
-          ts('Error on CiviCRM group %1 (Mailchimp list %2): %3',
-            [1 => $group_settings_link, 2 => $details['list_id'], 3 => $e->getMessage()]),
-          ts('Error'), 'error');
-      }
-    }
     // Add the Buttons.
     $this->addButtons($buttons);
+
+    // Check for warnings and output them as status messages.
+    $warnings = CRM_Mailchimp_Utils::checkGroupsConfig();
+    foreach ($warnings as $message) {
+      CRM_Core_Session::setStatus($message, [], ts('Error'), 'error');
+    }
   }
 
   public function setDefaultValues() {
@@ -152,7 +113,6 @@ class CRM_Mailchimp_Form_Setting extends CRM_Core_Form {
         'api_key'
       );
 
-      // Not sure we have a security key in apiv3... @todo
       CRM_Core_BAO_Setting::setItem($params['security_key'],
         self::MC_SETTING_GROUP,
         'security_key'

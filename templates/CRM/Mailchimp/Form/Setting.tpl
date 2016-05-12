@@ -17,7 +17,11 @@
           <tr class="crm-mailchimp-setting-security-key-block">
           <td class="label">{$form.security_key.label}</td>
           <td>{$form.security_key.html}<br/>
-      	    <span class="description">{ts} Define a security key to be used with webhooks{/ts}
+            <span class="description">{ts}Define a security key to be used with
+            webhooks. e.g. a 12+ character random string of upper- and
+            lower-case letters and numbers. Note if you change this once lists
+            are set up you'll need to update all the groups that serve as
+            memberships for Mailchimp lists.{/ts}
 	          </span><br/>
             <span class="description" id ="webhook_url">{ts}{$webhook_url}{/ts}
                   </span>

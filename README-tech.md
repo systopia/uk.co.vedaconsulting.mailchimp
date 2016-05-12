@@ -149,8 +149,21 @@ See integration test `testPullAddsContact()`.
 
 See integration test `testPullRemovesContacts()`.
 
-## Test that if we cannot identify someone because of duplication in CiviCRM we do not keep adding more duplicates...
+# Mailchimp Webhooks
 
+Mailchimp's webhooks are an important part of the system. If they are
+functioning correctly then the Pull sync should never need to make any changes.
+
+But they're a nightmare for non-techy users to configure, so now this extension
+takes care of them. When you visit the settings page all groups' webhooks are
+checked, with errors shown to the user. You can correct a list's webhooks by
+editing the CiviCRM group settings. There's a tickbox for doing the webhook
+changes which defaults to ticked, and when you save it will ensure everything is
+correct.
+
+Tests
+- `MailchimpApiIntegrationMockTest::testCheckGroupsConfig`
+- `MailchimpApiIntegrationMockTest::testConfigureList`
 
 
 
@@ -185,3 +198,16 @@ Because of these limitations, you cannot rely on this hook to keep your list
 up-to-date and will always need to do a CiviCRM to Mailchimp Push sync before
 sending a mailing.
 
+# Settings page
+
+The settings page stores details like the API key etc.
+
+However it also serves to check the mapped groups and lists are properly set up. Specifically it:
+
+- Checks that the list still exists on Mailchimp
+- Checks that the list's webhook is set.
+- Checks that the list's webhook "API" setting is off.
+
+Warnings are displayed on screen when these settings are wrong.
+
+These warnings are tested in `MailchimpApiIntegrationMockTest::testCheckGroupsConfig()`.

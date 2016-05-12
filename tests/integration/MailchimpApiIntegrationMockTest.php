@@ -520,4 +520,270 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
     $this->assertEquals(0, $sync->countCiviCrmMembers());
 
   }
+  /**
+   * Check that list problems are spotted.
+   *
+   * 1. Test for missing webhooks.
+   * 2. Test for error if the list is not found at Mailchimp.
+   * 3. Test for network error.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testCheckGroupsConfig() {
+    //
+    // Test 1
+    //
+    // The default mock list does not have any webhooks set.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks');
+    $groups = CRM_Mailchimp_Utils::getGroupsToSync([static::$civicrm_group_id_membership]);
+    $warnings = CRM_Mailchimp_Utils::checkGroupsConfig($groups);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains(ts('Need to create a webhook'), $warnings[0]);
+
+
+    //
+    // Test 2
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')
+      ->will(function($args) {
+        // Need to mock a 404 response.
+        $this->response = (object) ['http_code' => 404, 'data' => []];
+        $this->request = (object) ['method' => 'GET'];
+        throw new CRM_Mailchimp_RequestErrorException($this->reveal(), "Not found");
+      });
+    $groups = CRM_Mailchimp_Utils::getGroupsToSync([static::$civicrm_group_id_membership]);
+    $warnings = CRM_Mailchimp_Utils::checkGroupsConfig($groups);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains(ts('The Mailchimp list that this once worked with has been deleted'), $warnings[0]);
+
+    //
+    // Test 3
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')
+      ->will(function($args) {
+        // Need to mock a network error
+        $this->response = (object) ['http_code' => 500, 'data' => []];
+        throw new CRM_Mailchimp_NetworkErrorException($this->reveal(), "Someone unplugged internet");
+      });
+    $groups = CRM_Mailchimp_Utils::getGroupsToSync([static::$civicrm_group_id_membership]);
+    $warnings = CRM_Mailchimp_Utils::checkGroupsConfig($groups);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains(ts('Problems (possibly temporary)'), $warnings[0]);
+    $this->assertContains(ts('Someone unplugged internet'), $warnings[0]);
+
+
+  }
+  /**
+   * Check that config is updated as expected.
+   *
+   * 1. Webhook created where non exists.
+   * 2. Webhook untouched if ok
+   * 3. Webhook deleted, new one created if different.
+   * 4. Webhooks untouched if multiple
+   * 5. As 1 but in dry-run
+   * 6. As 2 but in dry-run
+   * 7. As 3 but in dry-run
+   *
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testConfigureList() {
+    //
+    // Test 1
+    //
+    // The default mock list does not have any webhooks set, test one gets
+    // created.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled();
+    $api_prophecy->post('/lists/dummylistid/webhooks', Argument::any())->shouldBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains(ts('Created a webhook at Mailchimp'), $warnings[0]);
+
+    //
+    // Test 2
+    //
+    // If it's all correct, nothing to do.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled()->willReturn(
+      json_decode(json_encode([
+        'http_code' => 200,
+        'data' => [
+          'webhooks' => [
+            [
+              'id' => 'dummywebhookid',
+              'url' => CRM_Mailchimp_Utils::getWebhookUrl(),
+              'events' => [
+                'subscribe' => TRUE,
+                'unsubscribe' => TRUE,
+                'profile' => TRUE,
+                'cleaned' => TRUE,
+                'upemail' => TRUE,
+                'campaign' => FALSE,
+              ],
+              'sources' => [
+                'user' => TRUE,
+                'admin' => TRUE,
+                'api' => FALSE,
+              ],
+            ]
+        ]]])));
+    $api_prophecy->post()->shouldNotBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id);
+    $this->assertEquals(0, count($warnings));
+
+    //
+    // Test 3
+    //
+    // If something's different, note and change.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled()->willReturn(
+      json_decode(json_encode([
+        'http_code' => 200,
+        'data' => [
+          'webhooks' => [
+            [
+              'id' => 'dummywebhookid',
+              'url' => 'http://example.com', // WRONG
+              'events' => [
+                'subscribe' => FALSE, // WRONG
+                'unsubscribe' => TRUE,
+                'profile' => TRUE,
+                'cleaned' => TRUE,
+                'upemail' => TRUE,
+                'campaign' => FALSE,
+              ],
+              'sources' => [
+                'user' => TRUE,
+                'admin' => TRUE,
+                'api' => TRUE, // WRONG
+              ],
+            ]
+        ]]])));
+    $api_prophecy->delete('/lists/dummylistid/webhooks/dummywebhookid')->shouldBeCalled();
+    $api_prophecy->post('/lists/dummylistid/webhooks', Argument::any())->shouldBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id);
+    $this->assertEquals(3, count($warnings));
+    $this->assertContains('Changed webhook URL from http://example.com to', $warnings[0]);
+    $this->assertContains('Changed webhook source api', $warnings[1]);
+    $this->assertContains('Changed webhook event subscribe', $warnings[2]);
+
+    //
+    // Test 4
+    //
+    // If multiple webhooks configured, leave it alone.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled()->willReturn(
+      json_decode(json_encode([
+        'http_code' => 200,
+        'data' => [
+          'webhooks' => [1, 2],
+        ]])));
+    $api_prophecy->delete()->shouldNotBeCalled();
+    $api_prophecy->post()->shouldNotBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains('Mailchimp list dummylistid has more than one webhook configured.', $warnings[0]);
+
+    //
+    // Test 5
+    //
+    // The default mock list does not have any webhooks set, test one gets
+    // created.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled();
+    $api_prophecy->delete()->shouldNotBeCalled();
+    $api_prophecy->post()->shouldNotBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id, TRUE);
+    $this->assertEquals(1, count($warnings));
+    $this->assertContains(ts('Need to create a webhook at Mailchimp'), $warnings[0]);
+
+    //
+    // Test 6
+    //
+    // If it's all correct, nothing to do.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled()->willReturn(
+      json_decode(json_encode([
+        'http_code' => 200,
+        'data' => [
+          'webhooks' => [
+            [
+              'id' => 'dummywebhookid',
+              'url' => CRM_Mailchimp_Utils::getWebhookUrl(),
+              'events' => [
+                'subscribe' => TRUE,
+                'unsubscribe' => TRUE,
+                'profile' => TRUE,
+                'cleaned' => TRUE,
+                'upemail' => TRUE,
+                'campaign' => FALSE,
+              ],
+              'sources' => [
+                'user' => TRUE,
+                'admin' => TRUE,
+                'api' => FALSE,
+              ],
+            ]
+        ]]])));
+    $api_prophecy->delete()->shouldNotBeCalled();
+    $api_prophecy->post()->shouldNotBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id, TRUE);
+    $this->assertEquals(0, count($warnings));
+
+    //
+    // Test 7
+    //
+    // If something's different, note and change.
+    //
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get('/lists/dummylistid/webhooks')->shouldBeCalled()->willReturn(
+      json_decode(json_encode([
+        'http_code' => 200,
+        'data' => [
+          'webhooks' => [
+            [
+              'id' => 'dummywebhookid',
+              'url' => 'http://example.com', // WRONG
+              'events' => [
+                'subscribe' => FALSE, // WRONG
+                'unsubscribe' => TRUE,
+                'profile' => TRUE,
+                'cleaned' => TRUE,
+                'upemail' => TRUE,
+                'campaign' => FALSE,
+              ],
+              'sources' => [
+                'user' => TRUE,
+                'admin' => TRUE,
+                'api' => TRUE, // WRONG
+              ],
+            ]
+        ]]])));
+    $api_prophecy->delete()->shouldNotBeCalled();
+    $api_prophecy->post()->shouldNotBeCalled();
+    $warnings = CRM_Mailchimp_Utils::configureList(static::$test_list_id, TRUE);
+    $this->assertEquals(3, count($warnings));
+    $this->assertContains('Need to change webhook URL from http://example.com to', $warnings[0]);
+    $this->assertContains('Need to change webhook source api', $warnings[1]);
+    $this->assertContains('Need to change webhook event subscribe', $warnings[2]);
+  }
 }
