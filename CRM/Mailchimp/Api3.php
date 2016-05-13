@@ -50,8 +50,13 @@ class CRM_Mailchimp_Api3 {
   public $response;
   /** For debugging. */
   protected static $request_id=0;
-  /** supply a filename to start logging of all API requests and responses.. */
-  public $log_to;
+  /** callback - if set logging will happen via the log() method.
+   *
+   *  Nb. a CiviCRM_Core_Error::debug_log_message facility is injected if you
+   *  enable debugging on the Mailchimp settings screen. But you can inject
+   *  something different, e.g. for testing.
+   */ 
+  protected $log_facility;
   /**
    * @param array $settings contains key 'api_key', possibly other settings.
    */
@@ -68,8 +73,22 @@ class CRM_Mailchimp_Api3 {
     if (empty($matches[1])) {
       throw new InvalidArgumentException("Invalid API key - could not extract datacentre from given API key.");      
     }
+
+    if (!empty($settings['log_facility'])) {
+      $this->setLogFacility($settinsg['log_facility']);
+    }
+
     $datacenter = $matches[1];
     $this->server = "https://$datacenter.api.mailchimp.com/3.0";
+  }
+  /**
+   * Sets the log_facility to a callback
+   */
+  public function setLogFacility($callback) {
+    if (!is_callable($callback)) {
+      throw new InvalidArgumentException("Log facility callback is not callable.");      
+    }
+    $this->log_facility = $callback;
   }
 
   /**
@@ -283,13 +302,11 @@ class CRM_Mailchimp_Api3 {
   /**
    * For debugging purposes.
    *
-   * Does nothing without $log_to being set to a filename.
+   * Does nothing without $log_facility being set to a callback.
    *
-   * Log format is like:
-   * #123 Took
    */
   protected function log() {
-    if (!$this->log_to) {
+    if (!$this->log_facility) {
       return;
     }
 
@@ -314,7 +331,8 @@ class CRM_Mailchimp_Api3 {
     $msg .= "\n\n";
 
     // Log response.
-    file_put_contents($this->log_to, $msg, FILE_APPEND);
+    $callback = $this->log_facility;
+    $callback($msg);
   }
   /**
    * Prepares the response object from the result of a cURL call.

@@ -96,9 +96,15 @@ class CRM_Mailchimp_Utils {
 
     // Singleton pattern.
     if (!isset(static::$mailchimp_api)) {
-      $api = new CRM_Mailchimp_Api3([
-          'api_key' => CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key')
-          ]);
+      $params = ['api_key' => CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key')];
+      $debugging = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'enable_debugging', NULL, FALSE);
+      if ($debugging == 1) {
+        // We want debugging. Inject a logging callback.
+        $params['log_facility'] = function($message) {
+          CRM_Core_Error::debug_log_message($message, FALSE, 'mailchimp');
+        };
+      }
+      $api = new CRM_Mailchimp_Api3($params);
       static::setMailchimpApi($api);
     }
 
@@ -886,12 +892,28 @@ class CRM_Mailchimp_Utils {
     CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $action', $action);
   }
 
-  static function checkDebug($class_function = 'classname', $debug) {
-    $debugging = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'enable_debugging', NULL, FALSE
-    );
+  /**
+   * Log a message and optionally a variable, if debugging is enabled.
+   */
+  public static function checkDebug($description, $variable='VARIABLE_NOT_PROVIDED') {
+    $debugging = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'enable_debugging', NULL, FALSE);
 
     if ($debugging == 1) {
-      CRM_Core_Error::debug_var($class_function, $debug);
+      if ($variable === 'VARIABLE_NOT_PROVIDED') {
+        // Simple log message.
+        CRM_Core_Error::debug_log_message($description, FALSE, 'mailchimp');
+      }
+      else {
+        // Log a variable.
+        CRM_Core_Error::debug_var(
+          $description,
+          $variable,
+          $print = FALSE,
+          $log = TRUE,
+          // Use a separate component for our logfiles in ConfigAndLog
+          $comp = 'mailchimp' 
+        );
+      }
     }
   }
 }

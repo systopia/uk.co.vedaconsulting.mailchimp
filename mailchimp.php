@@ -449,6 +449,7 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 	if ($objectName == 'Individual' || $objectName == 'Organization' || $objectName == 'Household') {
 		// Contact Edited
     // @todo artfulrobot: I don't understand the cases this is dealing with.
+    if (FALSE) {
 		if ($op == 'edit' || $op == 'create') {
 			if($objectRef->is_opt_out == 1) {
 				$action = 'unsubscribe';
@@ -474,6 +475,8 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 				}
 			}
 		}
+
+    }
 	}
 
 	/***** Contacts added/removed/deleted from CiviCRM group *****/

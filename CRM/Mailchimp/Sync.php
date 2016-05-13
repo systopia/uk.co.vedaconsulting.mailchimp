@@ -906,7 +906,7 @@ class CRM_Mailchimp_Sync {
     }
 
     // Re-enable the post hooks.
-    CRM_Mailchimp_Utils::$post_hook_enabled = FALSE;
+    CRM_Mailchimp_Utils::$post_hook_enabled = TRUE;
   }
   /**
    * Logic to determine update needed for pull.
