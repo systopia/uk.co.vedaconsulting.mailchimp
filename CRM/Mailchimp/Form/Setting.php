@@ -70,7 +70,7 @@ class CRM_Mailchimp_Form_Setting extends CRM_Core_Form {
     // Check for warnings and output them as status messages.
     $warnings = CRM_Mailchimp_Utils::checkGroupsConfig();
     foreach ($warnings as $message) {
-      CRM_Core_Session::setStatus($message, [], ts('Error'), 'error');
+      CRM_Core_Session::setStatus($message);
     }
   }
 

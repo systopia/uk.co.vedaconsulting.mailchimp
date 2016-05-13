@@ -75,7 +75,7 @@ class CRM_Mailchimp_Api3 {
     }
 
     if (!empty($settings['log_facility'])) {
-      $this->setLogFacility($settinsg['log_facility']);
+      $this->setLogFacility($settings['log_facility']);
     }
 
     $datacenter = $matches[1];

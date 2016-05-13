@@ -7,6 +7,9 @@ class CRM_Mailchimp_Utils {
   /** Mailchimp API object to use. */
   static protected $mailchimp_api;
 
+  /** Holds a cache of list names from Mailchimp */
+  static protected $mailchimp_lists;
+
   /**
    * Checked by mailchimp_civicrm_post before it acts on anything.
    *
@@ -138,7 +141,7 @@ class CRM_Mailchimp_Utils {
    *
    * @param null|Array $groups array of membership groups to check, or NULL to
    *                   check all.
-   *              
+   *
    * @return Array of message strings that should be output with CRM_Core_Error
    * or such.
    *
@@ -292,6 +295,7 @@ class CRM_Mailchimp_Utils {
    * Indexed by CiviCRM groupId, including:
    *
    * - list_id    (MC)
+   *
    * - grouping_id(MC) // deprecate
    * - grouping_name (MC) // deprecate
    * - group_id   (MC) // deprecate
@@ -341,21 +345,24 @@ class CRM_Mailchimp_Utils {
       WHERE $whereClause";
     $dao = CRM_Core_DAO::executeQuery($query, $params);
     while ($dao->fetch()) {
+      $list_name = CRM_Mailchimp_Utils::getMCListName($dao->mc_list_id);
       $interest_name = CRM_Mailchimp_Utils::getMCInterestName($dao->mc_list_id, $dao->mc_grouping_id, $dao->mc_group_id);
       $category_name = CRM_Mailchimp_Utils::getMCCategoryName($dao->mc_list_id, $dao->mc_grouping_id);
       $groups[$dao->entity_id] =
         array(
+          // Details about Mailchimp
           'list_id'               => $dao->mc_list_id,
+          'list_name'             => $list_name,
           'category_id'           => $dao->mc_grouping_id,
           'category_name'         => $category_name,
           'interest_id'           => $dao->mc_group_id,
           'interest_name'         => $interest_name,
-
+          // Details from CiviCRM
           'is_mc_update_grouping' => $dao->is_mc_update_grouping,
           'civigroup_title'       => $dao->civigroup_title,
           'civigroup_uses_cache'    => (bool) (($dao->saved_search_id > 0) || (bool) $dao->children),
 
-          // Deprecated:
+          // Deprecated from Mailchimp.
           'grouping_id'           => $dao->mc_grouping_id,
           'grouping_name'         => $category_name,
           'group_id'              => $dao->mc_group_id,
@@ -410,6 +417,28 @@ class CRM_Mailchimp_Utils {
   }
 
   /**
+   * Return the name at mailchimp for the given Mailchimp list id.
+   *
+   * @return string.
+   */
+  public static function getMCListName($list_id) {
+    if (!isset(static::$mailchimp_lists)) {
+      static::$mailchimp_lists[$list['id']] = [];
+      $api = CRM_Mailchimp_Utils::getMailchimpApi();
+      $lists = $api->get('/lists', ['fields' => 'lists.id,lists.name'])->data->lists;
+      foreach ($lists as $list) {
+        static::$mailchimp_lists[$list->id] = $list->name;
+      }
+    }
+
+    if (!isset(static::$mailchimp_lists[$list_id])) {
+      // Return ZLS if not found.
+      return '';
+    }
+    return static::$mailchimp_lists[$list_id];
+  }
+
+  /**
    * return the group name for given list, grouping and group
    *
    */
@@ -454,7 +483,6 @@ class CRM_Mailchimp_Utils {
    * Returns an array like {
    *   [category_id] => array(
    *     'id' => [category_id],
-   *     'name' => ...,
    *     'interests' => array(
    *        [interest_id] => array(
    *          'id' => [interest_id],
@@ -481,8 +509,9 @@ class CRM_Mailchimp_Utils {
       $mapper[$listID] = array();
 
       try {
-        $categories = CRM_Mailchimp_Utils::getMailchimpApi()
-          ->get("/lists/$listID/interest-categories",
+        // Get list name.
+        $api = CRM_Mailchimp_Utils::getMailchimpApi();
+        $categories = $api->get("/lists/$listID/interest-categories",
             ['fields' => 'categories.id,categories.title','count'=>10000])
           ->data->categories;
       }
