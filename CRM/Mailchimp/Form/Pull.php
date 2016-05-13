@@ -22,6 +22,9 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
       $output_stats = array();
       foreach ($groups as $group_id => $details) {
+        if (empty($details['list_name'])) {
+          continue;
+        }
         $list_stats = $stats[$details['list_id']];
         $output_stats[] = array(
           'name' => $details['civigroup_title'],
@@ -103,6 +106,11 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
     // Each list is a task.
     $listCount = 1;
     foreach ($groups as $group_id => $details) {
+      if (empty($details['list_name'])) {
+        // This list has been deleted at Mailchimp, or for some other reason we
+        // could not access its name. Best not to sync it.
+        continue;
+      }
       $stats[$details['list_id']] = array(
         'mc_count' => 0,
         'c_count' => 0,
@@ -116,7 +124,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
       $task  = new CRM_Queue_Task(
         array ('CRM_Mailchimp_Form_Pull', 'syncPullList'),
         array($details['list_id'], $identifier),
-        "Preparing queue for $identifier"
+        "$identifier: collecting data from CiviCRM..."
       );
 
       // Add the Task to the Queue
