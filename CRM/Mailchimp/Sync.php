@@ -132,7 +132,13 @@ class CRM_Mailchimp_Sync {
 
         // we're ready to store this but we need a hash that contains all the info
         // for comparison with the hash created from the CiviCRM data (elsewhere).
-        $hash = md5($member->email_address . $first_name . $last_name . $interests);
+        //
+        // Previous algorithms included email here, but we actually allow
+        // mailchimp to have any email that belongs to the contact in the
+        // membership group, even though for new additions we'd use the bulk
+        // email. So we don't count an email mismatch as a problem.
+        // $hash = md5($member->email_address . $first_name . $last_name . $interests);
+        $hash = md5($first_name . $last_name . $interests);
         // run insert prepared statement
         $result = $db->execute($insert, [
           $member->email_address,
@@ -476,7 +482,9 @@ class CRM_Mailchimp_Sync {
       // we're ready to store this but we need a hash that contains all the info
       // for comparison with the hash created from the CiviCRM data (elsewhere).
       //          email,           first name,      last name,      groupings
-      $hash = md5($email . $contact['first_name'] . $contact['last_name'] . $info);
+      // See note above about why we don't include email in the hash.
+      // $hash = md5($email . $contact['first_name'] . $contact['last_name'] . $info);
+      $hash = md5($contact['first_name'] . $contact['last_name'] . $info);
       // run insert prepared statement
       $db->execute($insert, array($contact['id'], $email, $contact['first_name'], $contact['last_name'], $hash, $info));
       $collected++;
@@ -1049,7 +1057,7 @@ class CRM_Mailchimp_Sync {
     // Delete records have the same hash - these do not need an update.
     // count for testing purposes.
     $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
-      INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
+      INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
     $dao->fetch();
     $count = $dao->co;
     if ($count > 0) {

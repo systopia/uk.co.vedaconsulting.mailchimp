@@ -716,6 +716,113 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
     }
   }
 
+  /**
+   * Contact at mailchimp subscribed with alternative email, known to us.
+   *
+   * Put contact 1 in group and subscribe.
+   * Add a different bulk email to contact 1
+   * Do a pull.
+   *
+   * Expect no changes.
+   *
+   * @group pull
+   */
+  public function testPullContactWithOtherEmailInSync() {
+
+    try {
+      $this->joinMembershipGroup(static::$civicrm_contact_1);
+      // Give contact 1 a new, additional bulk email.
+      civicrm_api3('Email', 'create', [
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'email' => 'new-' . static::$civicrm_contact_1['email'],
+        'is_bulkmail' => 1,
+        ]);
+
+      // Collect data from Mailchimp and CiviCRM.
+      $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+      $sync->collectCiviCrm('pull');
+      $this->assertEquals(1, $sync->countCiviCrmMembers());
+      $sync->collectMailchimp('pull', TRUE);
+      $this->assertEquals(1, $sync->countMailchimpMembers());
+
+      // Remove in-sync things these two should be in-sync.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(1, $in_sync);
+    }
+    catch (CRM_Mailchimp_Exception $e) {
+      // Spit out request and response for debugging.
+      print "Request:\n";
+      print_r($e->request);
+      print "Response:\n";
+      print_r($e->response);
+      // re-throw exception.
+      throw $e;
+    }
+  }
+
+  /**
+   * Contact at mailchimp subscribed with alternative email, known to us and has
+   * name differences.
+   *
+   * Put contact 1 in group and subscribe.
+   * Add a different bulk email to contact 1
+   * Do a pull.
+   *
+   * Expect no changes.
+   *
+   * @group pull
+   */
+  public function testPullContactWithOtherEmailDiff() {
+
+    try {
+      $this->joinMembershipGroup(static::$civicrm_contact_1);
+      // Give contact 1 a new, additional bulk email.
+      civicrm_api3('Email', 'create', [
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'email' => 'new-' . static::$civicrm_contact_1['email'],
+        'is_bulkmail' => 1,
+        ]);
+      // Update our name.
+      civicrm_api3('Contact', 'create',[
+        'contact_id' => static::$civicrm_contact_1['contact_id'],
+        'first_name' => 'Betty',
+        ]);
+
+      // Collect data from Mailchimp and CiviCRM.
+      $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+      $sync->collectCiviCrm('pull');
+      $this->assertEquals(1, $sync->countCiviCrmMembers());
+      $sync->collectMailchimp('pull', TRUE);
+      $this->assertEquals(1, $sync->countMailchimpMembers());
+
+      // Remove in-sync things these two should be in-sync.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Make changes in Civi.
+      $stats = $sync->updateCiviFromMailchimp();
+      $this->assertEquals(0, $stats['add_new']);
+      $this->assertEquals(0, $stats['add_existing']);
+      $this->assertEquals(0, $stats['unsubscribes']);
+      $this->assertEquals(1, $stats['updates']);
+
+      // Check first name was changed, last name unchanged.
+      $this->assertContactName(static::$civicrm_contact_1, 'Betty',
+        static::$civicrm_contact_1['last_name']);
+      // Check contact is (still) in membership group.
+      $this->assertContactIsInGroup(static::$civicrm_contact_1['contact_id'], static::$civicrm_group_id_membership);
+    }
+    catch (CRM_Mailchimp_Exception $e) {
+      // Spit out request and response for debugging.
+      print "Request:\n";
+      print_r($e->request);
+      print "Response:\n";
+      print_r($e->response);
+      // re-throw exception.
+      throw $e;
+    }
+  }
+
 
   /**
    * Check interests are properly mapped as groups are changed and that
@@ -853,6 +960,26 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
     }
     catch (CRM_Mailchimp_RequestErrorException $e) {
       $this->assertEquals(404, $e->response->http_code);
+    }
+  }
+  /**
+   * Check the contact's name field.
+   *
+   * @param mixed $first_name NULL means do not compare, otherwise a comparison
+   *                          is made.
+   * @param mixed $last_name  works same
+   */
+  public function assertContactName($contact, $first_name=NULL, $last_name=NULL) {
+    $this->assertGreaterThan(0, $contact['contact_id']);
+    $result = civicrm_api3('Contact', 'getsingle', [
+      'contact_id' => $contact['contact_id'],
+      'return' => 'first_name,last_name',
+      ]);
+    if ($first_name !== NULL) {
+      $this->assertEquals($first_name, $result['first_name'],
+        "First name was not as expected for contact $contact[contact_id]");
+      $this->assertEquals($last_name, $result['last_name'],
+        "Last name was not as expected for contact $contact[contact_id]");
     }
   }
 }

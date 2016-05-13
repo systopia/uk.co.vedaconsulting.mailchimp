@@ -200,7 +200,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
     // Nb. collectCiviCrm must have run before we call this.
     $sync = new CRM_Mailchimp_Sync($listID);
-    $stats[$listID]['mc_count'] = $sync->collectMailchimp('push', $civi_collect_has_already_run=TRUE);
+    $stats[$listID]['mc_count'] = $sync->collectMailchimp('pull', $civi_collect_has_already_run=TRUE);
 
     CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullCollectMailchimp count=', $stats[$listID]['mc_count']);
     static::updatePullStats($stats);
@@ -232,7 +232,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
     // this generates updates and group changes.
     $stats[$listID] = $sync->updateCiviFromMailchimp();
     // Finally, finish up by removing the two temporary tables
-    CRM_Mailchimp_Sync::dropTemporaryTables();
+    // @todo re-enable this: CRM_Mailchimp_Sync::dropTemporaryTables();
     static::updatePullStats($stats);
 
     return CRM_Queue_Task::TASK_SUCCESS;
