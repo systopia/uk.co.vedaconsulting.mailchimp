@@ -84,7 +84,7 @@ class CRM_Mailchimp_Sync {
    * @param string $mode pull|push.
    * @return int   number of contacts collected.
    */
-  public function collectMailchimp($mode, $collect_civicrm_has_run=FALSE) {
+  public function collectMailchimp($mode) {
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Sync syncCollectMailchimp $this->list_id= ', $this->list_id);
     if (!in_array($mode, ['pull', 'push'])) {
       throw new InvalidArgumentException(__FUNCTION__ . " expects push/pull but called with '$mode'.");
@@ -157,17 +157,6 @@ class CRM_Mailchimp_Sync {
     // Tidy up.
     fclose($handle);
     $db->freePrepared($insert);
-
-    // Do the fast SQL identification against CiviCRM contacts.
-    if ($collect_civicrm_has_run) {
-      // We have done the collection for CiviCRM into the temporary table for
-      // this same list and same mode, so we're safe to figure contacts from
-      // that.
-      static::guessContactIdsBySubscribers();
-    }
-    static::guessContactIdsByUniqueEmail();
-    static::guessContactIdsByNameAndEmail();
-
     return $collected;
   }
   /**
@@ -782,13 +771,18 @@ class CRM_Mailchimp_Sync {
    * 1. Additions:
    *      - New contacts created (and added to membership group)
    *      - Existing contacts added to membership group.
-   * 2. Contacts removed from membership group
-   * 3. Other updates, but no membership changes.
+   * 2. Existing contacts removed from membership group
+   *
+   * And, for existing contacts:
+   *
+   * 1. Changes made.
+   * 3. Changes not made.
    *
    * @return array With the following keys:
    *  - add_new,
    *  - add_existing,
    *  - unsubscribes,
+   *  - unchanged,
    *  - updates,
    */
   public function updateCiviFromMailchimp() {
@@ -805,12 +799,12 @@ class CRM_Mailchimp_Sync {
       'add_existing' => 0,
       'unsubscribes' => 0,
       'updates'      => 0,
+      'unchanged'    => 0,
       ];
 
     // all Mailchimp table
     $dao = CRM_Core_DAO::executeQuery( "SELECT m.*,
-      c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name,
-      (COALESCE(c.interests,'') = m.interests) identical_groupings
+      c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name
       FROM tmp_mailchimp_push_m m
       LEFT JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id
       ;");
@@ -827,9 +821,11 @@ class CRM_Mailchimp_Sync {
     while ($dao->fetch()) {
       $contact_created = FALSE;
       $contact_added = FALSE;
+      $existing_contact_changed = FALSE;
 
       // Get contact_id and ensure contact details are updated.
       if (!empty($dao->cid_guess)) {
+        // Matched existing contact.
         $contact_id = $dao->cid_guess;
 
         // Update the first name and last name of the contacts we know
@@ -842,6 +838,14 @@ class CRM_Mailchimp_Sync {
         if ($edits) {
           // There are changes to be made so make them now.
           civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
+          $existing_contact_changed = TRUE;
+        }
+        // For existing contacts, if the interest groups have not changed then
+        // we're finished now.
+        if ($dao->c_interests == $dao->interests) {
+          // Update the correct statistic.
+          $stats[$existing_contact_changed ? 'updates' : 'unchanged']++;
+          continue;
         }
       }
       else {
@@ -865,12 +869,6 @@ class CRM_Mailchimp_Sync {
           // @todo have some way to report.
           continue;
         }
-      }
-
-      if ($dao->identical_groupings) {
-        // Nothing more to do (this won't be the case for new contacts).
-        $stats['updates']++;
-        continue;
       }
 
       // Groups are different between Mailchimp and CiviCRM.
@@ -1030,11 +1028,28 @@ class CRM_Mailchimp_Sync {
     return $emails;
   }
   /**
-   * Match and create contacts the slow way.
+   * Match mailchimp records to particular contacts in CiviCRM.
+   *
+   * This requires that both collect functions have been run in the same mode
+   * (push/pull).
+   *
+   * First we attempt a number of SQL based strategies as these are the fastest.
    *
    * If the fast SQL matches have failed, we need to do it the slow way.
    */
-  public function matchDifficultContacts() {
+  public function matchMailchimpMembersToContacts() {
+
+    // Do the fast SQL identification against CiviCRM contacts.
+    if ($collect_civicrm_has_run) {
+      // We have done the collection for CiviCRM into the temporary table for
+      // this same list and same mode, so we're safe to figure contacts from
+      // that.
+      static::guessContactIdsBySubscribers();
+    }
+    static::guessContactIdsByUniqueEmail();
+    static::guessContactIdsByNameAndEmail();
+
+    // Now slow match the rest.
     $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess = 0;");
     $db = $dao->getDatabaseConnection();
     $update = $db->prepare('UPDATE tmp_mailchimp_push_m

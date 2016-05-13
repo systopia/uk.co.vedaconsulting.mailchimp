@@ -221,7 +221,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
     // Nb. collectCiviCrm must have run before we call this.
     $sync = new CRM_Mailchimp_Sync($listID);
-    $c = $sync->matchDifficultContacts();
+    $c = $sync->matchMailchimpMembersToContacts();
     CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullDifficultMatches count=', $c);
     return CRM_Queue_Task::TASK_SUCCESS;
   }

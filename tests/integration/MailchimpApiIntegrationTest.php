@@ -195,7 +195,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // There shouldn't be any members in this list yet.
       $sync->collectMailchimp('push', TRUE);
       $this->assertEquals(0, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // There should not be any in sync records.
       $in_sync = $sync->removeInSync();
@@ -289,7 +289,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // Collect from Mailchimp.
       $sync->collectMailchimp('push', TRUE);
       $this->assertEquals(1, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // As the records are not in sync, none should get deleted.
       $in_sync = $sync->removeInSync();
@@ -336,7 +336,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // Now re-collect from Mailchimp and check all are in sync.
       $sync->collectMailchimp('push', TRUE);
       $this->assertEquals(2, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
       // Verify that they are in deed all in sync:
       $in_sync = $sync->removeInSync();
       $this->assertEquals(2, $in_sync);
@@ -392,7 +392,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // Collect from Mailchimp.
       $sync->collectMailchimp('push', TRUE);
       $this->assertEquals(1, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Are the changes noted? As the records are not in sync, none should get
       // deleted.
@@ -404,7 +404,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
 
       // Check all unsubscribed at Mailchimp.
       $sync->collectMailchimp('push', TRUE);
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
       $this->assertEquals(0, $sync->countMailchimpMembers());
 
       // Now fetch member details from Mailchimp.
@@ -464,7 +464,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
       $sync->collectCiviCrm('pull');
       $sync->collectMailchimp('pull', TRUE);
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things (both have changed, should be zero)
       $in_sync = $sync->removeInSync();
@@ -523,7 +523,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
       $sync->collectCiviCrm('pull');
       $sync->collectMailchimp('pull', TRUE);
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things (both have changed, should be zero)
       $in_sync = $sync->removeInSync();
@@ -578,7 +578,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
       $sync->collectCiviCrm('pull');
       $sync->collectMailchimp('pull', TRUE);
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things - should be 1 because except for this change
       // we're not allowed to change, nothing has changed.
@@ -631,7 +631,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
       $sync->collectCiviCrm('pull');
       $sync->collectMailchimp('pull', TRUE);
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things (nothing should be in sync)
       $in_sync = $sync->removeInSync();
@@ -701,7 +701,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       // Nothing should be subscribed at Mailchimp.
       $sync->collectMailchimp('pull', TRUE);
       $this->assertEquals(0, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things (nothing is in sync)
       $in_sync = $sync->removeInSync();
@@ -754,7 +754,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(1, $sync->countCiviCrmMembers());
       $sync->collectMailchimp('pull', TRUE);
       $this->assertEquals(1, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things these two should be in-sync.
       $in_sync = $sync->removeInSync();
@@ -805,7 +805,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(1, $sync->countCiviCrmMembers());
       $sync->collectMailchimp('pull', TRUE);
       $this->assertEquals(1, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
       $this->assertEquals(0, $difficult_matches);
 
       // Remove in-sync things these two should be in-sync.
@@ -882,7 +882,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(1, $sync->countCiviCrmMembers());
       $sync->collectMailchimp('push', TRUE);
       $this->assertEquals(1, $sync->countMailchimpMembers());
-      $difficult_matches = $sync->matchDifficultContacts();
+      $difficult_matches = $sync->matchMailchimpMembersToContacts();
 
       // This should return 1
       $dao = CRM_Core_DAO::executeQuery("SELECT * FROM tmp_mailchimp_push_m");
