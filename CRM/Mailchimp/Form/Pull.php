@@ -161,7 +161,14 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
     $ctx->queue->createItem( new CRM_Queue_Task(
       array('CRM_Mailchimp_Form_Pull', 'syncPullCollectMailchimp'),
       array($listID),
-      "$identifier: Fetched data from Mailchimp. Comparing..."
+      "$identifier: Fetched data from Mailchimp. Matching..."
+    ));
+
+    // Add the slow match process for difficult contacts.
+    $ctx->queue->createItem( new CRM_Queue_Task(
+      array('CRM_Mailchimp_Form_Pull', 'syncPullDifficultMatches'),
+      array($listID),
+      "$identifier: Matched up contacts. Comparing..."
     ));
 
     $ctx->queue->createItem( new CRM_Queue_Task(
@@ -204,6 +211,18 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
     CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullCollectMailchimp count=', $stats[$listID]['mc_count']);
     static::updatePullStats($stats);
+    return CRM_Queue_Task::TASK_SUCCESS;
+  }
+
+  /**
+   * Do the difficult matches.
+   */
+  public static function syncPullDifficultMatches(CRM_Queue_TaskContext $ctx, $listID) {
+
+    // Nb. collectCiviCrm must have run before we call this.
+    $sync = new CRM_Mailchimp_Sync($listID);
+    $c = $sync->matchDifficultContacts();
+    CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullDifficultMatches count=', $c);
     return CRM_Queue_Task::TASK_SUCCESS;
   }
 

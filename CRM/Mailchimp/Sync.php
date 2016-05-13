@@ -521,7 +521,7 @@ class CRM_Mailchimp_Sync {
         last_name VARCHAR(100) NOT NULL,
         hash CHAR(32) NOT NULL,
         interests VARCHAR(4096) NOT NULL,
-        cid_guess INT(10),
+        cid_guess INT(10) NOT NULL,
         PRIMARY KEY (email, hash),
         KEY (cid_guess))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
@@ -664,7 +664,7 @@ class CRM_Mailchimp_Sync {
       m.interests m_interests, m.first_name m_first_name, m.last_name m_last_name,
       m.email m_email
       FROM tmp_mailchimp_push_c c
-      LEFT JOIN tmp_mailchimp_push_m m ON c.email = m.email;");
+      LEFT JOIN tmp_mailchimp_push_m m ON c.contact_id = m.cid_guess;");
 
     $url_prefix = "/lists/$this->list_id/members/";
     $changes = $additions = 0;
@@ -812,7 +812,7 @@ class CRM_Mailchimp_Sync {
       c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name,
       (COALESCE(c.interests,'') = m.interests) identical_groupings
       FROM tmp_mailchimp_push_m m
-      LEFT JOIN tmp_mailchimp_push_c c ON m.email = c.email
+      LEFT JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id
       ;");
 
     // Create lookup hash to map Mailchimp Interest Ids to CiviCRM Groups.
@@ -822,7 +822,7 @@ class CRM_Mailchimp_Sync {
     }
 
     // Loop records found at Mailchimp, creating/finding contacts in CiviCRM.
-    
+
     // Stats on a per-contact basis.
     while ($dao->fetch()) {
       $contact_created = FALSE;
@@ -832,8 +832,8 @@ class CRM_Mailchimp_Sync {
       if (!empty($dao->cid_guess)) {
         $contact_id = $dao->cid_guess;
 
-        // Update the first name and last name of the contacts we already
-        // matched, if needed and making sure we don't overwrite
+        // Update the first name and last name of the contacts we know
+        // if needed and making sure we don't overwrite
         // something with nothing. See issue #188.
         $edits = static::updateCiviFromMailchimpContactLogic(
           ['first_name' => $dao->first_name,   'last_name' => $dao->last_name],
@@ -845,40 +845,21 @@ class CRM_Mailchimp_Sync {
         }
       }
       else {
-        // We don't know yet who this is. Check the slow way.
         try {
-          $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
-          if ($contact_id) {
-            // Contact found.
-            $result = civicrm_api3('Contact', 'getsingle', ['contact_id' => $contact_id]);
-            $edits = static::updateCiviFromMailchimpContactLogic(
-              ['first_name' => $dao->first_name, 'last_name' => $dao->last_name],
-              $result);
-            if ($edits) {
-              // Name updates required.
-              $result = civicrm_api3('Contact', 'create', ['contact_id' => $contact_id] + $edits);
-            }
-          }
-          else {
-            // Contact does not exist, create a new one.
-            $result = civicrm_api3('Contact', 'create', [
-              'contact_type' => 'Individual',
-              'first_name'   => $dao->first_name,
-              'last_name'    => $dao->last_name,
-              'email'        => $dao->email,
-              'sequential'   => 1,
-              ]);
-            $contact_id = $result['values'][0]['id'];
-            $contact_created = TRUE;
-          }
+          // Contact does not exist, create a new one.
+          $result = civicrm_api3('Contact', 'create', [
+            'contact_type' => 'Individual',
+            'first_name'   => $dao->first_name,
+            'last_name'    => $dao->last_name,
+            'email'        => $dao->email,
+            'sequential'   => 1,
+            ]);
+          $contact_id = $result['values'][0]['id'];
+          $contact_created = TRUE;
         }
         catch (CRM_Mailchimp_DuplicateContactsException $e) {
           // We have absolutely failed to identify this subscriber and there's
           // nothing we can do about it.
-          $contact_id = null; 
-        }
-
-        if(!$contact_id) {
           // We failed to identify/create the contact.
           // Move on to the next record, nothing we can do here.
           // @todo have some way to report.
@@ -943,7 +924,7 @@ class CRM_Mailchimp_Sync {
     $dao = CRM_Core_DAO::executeQuery( "
     SELECT c.contact_id
       FROM tmp_mailchimp_push_c c
-      LEFT OUTER JOIN tmp_mailchimp_push_m m ON m.email = c.email
+      LEFT OUTER JOIN tmp_mailchimp_push_m m ON m.cid_guess = c.contact_id
       WHERE m.email IS NULL;
       ");
     // Collect the contact_ids that need removing from the membership group.
@@ -1039,7 +1020,7 @@ class CRM_Mailchimp_Sync {
       "SELECT m.email
        FROM tmp_mailchimp_push_m m
        WHERE NOT EXISTS (
-         SELECT email FROM tmp_mailchimp_push_c c WHERE c.email = m.email
+         SELECT c.contact_id FROM tmp_mailchimp_push_c c WHERE c.contact_id = m.cid_guess
        );");
 
     $emails = [];
@@ -1047,6 +1028,35 @@ class CRM_Mailchimp_Sync {
       $emails[] = $dao->email;
     }
     return $emails;
+  }
+  /**
+   * Match and create contacts the slow way.
+   *
+   * If the fast SQL matches have failed, we need to do it the slow way.
+   */
+  public function matchDifficultContacts() {
+    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess = 0;");
+    $db = $dao->getDatabaseConnection();
+    $update = $db->prepare('UPDATE tmp_mailchimp_push_m
+      SET cid_guess = ? WHERE email = ? AND hash = ?');
+    $count = 0;
+    while ($dao->fetch()) {
+      $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
+      if ($contact_id) {
+        // Contact found.
+        $result = $db->execute($update, [
+          $contact_id,
+          $dao->email,
+          $dao->hash,
+        ]);
+        if ($result instanceof DB_Error) {
+          throw new Exception ($result->message . "\n" . $result->userinfo);
+        }
+        $count++;
+      }
+    }
+    $db->freePrepared($update);
+    return $count;
   }
   /**
    * Removes from the temporary tables those records that do not need processing.
