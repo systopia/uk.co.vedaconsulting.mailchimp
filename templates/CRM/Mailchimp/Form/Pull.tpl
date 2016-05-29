@@ -6,13 +6,14 @@
       {foreach from=$stats item=group}
       <h2>{$group.name}</h2>
       <table class="form-layout-compressed">
-      <tr><td>{ts}Contacts on CiviCRM and in this group (originally){/ts}:</td><td>{$group.stats.c_count}</td></tr>
+      <tr><td>{ts}Contacts on CiviCRM and in membership group (originally){/ts}:</td><td>{$group.stats.c_count}</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;{ts}Of these, kept because subscribed at Mailchimp:{/ts}:</td><td>{$group.stats.in_sync}</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;{ts}Of these, removed because not subscribed at Mailchimp:{/ts}:</td><td>{$group.stats.removed}</td></tr>
       <tr><td>{ts}Contacts on Mailchimp{/ts}:</td><td>{$group.stats.mc_count}</td></tr>
-      <tr><td>{ts}Contacts that were in sync already{/ts}:</td><td>{$group.stats.in_sync}</td></tr>
-      <tr><td>{ts}Contacts updated in CiviCRM{/ts}:</td><td>{$group.stats.updates}</td></tr>
-      <tr><td>{ts}New Contacts created and added to membership group{/ts}:</td><td>{$group.stats.add_new}</td></tr>
-      <tr><td>{ts}Existing Contacts added to membership group{/ts}:</td><td>{$group.stats.add_existing}</td></tr>
-      <tr><td>{ts}Contacts removed from membership group{/ts}:</td><td>{$group.stats.unsubscribes}</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;{ts}Of these, already in membership group{/ts}:</td><td>{$group.stats.in_sync}</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;{ts}Of these, existing contacts added to membership group{/ts}:</td><td>{$group.stats.joined}</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;{ts}Of these, new contacts created{/ts}:</td><td>{$group.stats.created}</td></tr>
+      <tr><td>{ts}Existing contacts updated{/ts}:</td><td>{$group.stats.updated}</td></tr>
       </table>
       {/foreach}
     </div>

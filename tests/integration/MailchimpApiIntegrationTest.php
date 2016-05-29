@@ -464,14 +464,21 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
       $sync->collectCiviCrm('pull');
       $sync->collectMailchimp('pull', TRUE);
-      $difficult_matches = $sync->matchMailchimpMembersToContacts();
+      $sync->matchMailchimpMembersToContacts();
 
       // Remove in-sync things (both have changed, should be zero)
       $in_sync = $sync->removeInSync();
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
-      $sync->updateCiviFromMailchimp();
+      $stats = $sync->updateCiviFromMailchimp();
+      $this->assertEquals([
+        'created' => 0,
+        'joined'  => 0,
+        'in_sync' => 2, // both are in the membership group.
+        'removed' => 0,
+        'updated' => 1, // only one contact should be changed.
+        ], $stats);
 
       // Ensure the updated name for contact 1 is pulled from Mailchimp to Civi.
       civicrm_api3('Contact', 'getsingle', [
@@ -530,7 +537,14 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
-      $sync->updateCiviFromMailchimp();
+      $stats = $sync->updateCiviFromMailchimp();
+      $this->assertEquals([
+        'created' => 0,
+        'joined'  => 0,
+        'in_sync' => 1,
+        'removed' => 0,
+        'updated' => 1,
+        ], $stats);
 
       $this->assertContactIsNotInGroup(static::$civicrm_contact_1['contact_id'], static::$civicrm_group_id_interest_1);
       $this->assertContactIsInGroup(static::$civicrm_contact_1['contact_id'], static::$civicrm_group_id_interest_2);
@@ -638,7 +652,14 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
-      $sync->updateCiviFromMailchimp();
+      $stats = $sync->updateCiviFromMailchimp();
+      $this->assertEquals([
+        'created' => 1,
+        'joined'  => 0,
+        'in_sync' => 0,
+        'removed' => 0,
+        'updated' => 0,
+        ], $stats);
 
       // Ensure expected change was made.
       $result = civicrm_api3('Contact', 'getsingle', [
@@ -708,7 +729,14 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
-      $sync->updateCiviFromMailchimp();
+      $stats = $sync->updateCiviFromMailchimp();
+      $this->assertEquals([
+        'created' => 0,
+        'joined'  => 0,
+        'in_sync' => 0,
+        'removed' => 2,
+        'updated' => 0,
+        ], $stats);
 
       // Each contact should now be removed from the group.
       $this->assertContactIsNotInGroup(static::$civicrm_contact_1['contact_id'], static::$civicrm_group_id_membership);
@@ -808,16 +836,19 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $difficult_matches = $sync->matchMailchimpMembersToContacts();
       $this->assertEquals(0, $difficult_matches);
 
-      // Remove in-sync things these two should be in-sync.
+      // Remove in-sync things - they are not in sync.
       $in_sync = $sync->removeInSync();
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
       $stats = $sync->updateCiviFromMailchimp();
-      $this->assertEquals(0, $stats['add_new']);
-      $this->assertEquals(0, $stats['add_existing']);
-      $this->assertEquals(0, $stats['unsubscribes']);
-      $this->assertEquals(1, $stats['updates']);
+      $this->assertEquals([
+        'created' => 0,
+        'joined'  => 0,
+        'in_sync' => 1, // Contact should be recognised as in group.
+        'removed' => 0,
+        'updated' => 1, // Name should be updated.
+        ], $stats);
 
       // Check first name was changed back to the original, last name unchanged.
       $this->assertContactName(static::$civicrm_contact_1,

@@ -172,10 +172,10 @@ class CRM_Mailchimp_Sync {
     // If an address is unique, that's the one we need.
     $result = CRM_Core_DAO::executeQuery(
         "UPDATE tmp_mailchimp_push_m m
-          JOIN civicrm_email e1 ON m.email = e1.email
-          LEFT OUTER JOIN civicrm_email e2 ON m.email = e2.email AND e1.contact_id <> e2.contact_id
+          JOIN civicrm_email e1 ON m.email = e1.email INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.is_deleted = 0
+          LEFT JOIN civicrm_email e2 ON m.email = e2.email AND e1.contact_id <> e2.contact_id LEFT JOIN civicrm_contact c2 ON e2.contact_id = c2.id AND c2.is_deleted = 0
           SET m.cid_guess = e1.contact_id
-          WHERE e2.id IS NULL");
+          WHERE c2.id IS NULL");
     $result->free();
   }
   /**
@@ -194,11 +194,12 @@ class CRM_Mailchimp_Sync {
     CRM_Core_DAO::executeQuery(
        "UPDATE tmp_mailchimp_push_m m
         INNER JOIN civicrm_email e1 ON m.email = e1.email
-        INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name 
+        INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name AND c1.is_deleted = 0
         SET m.cid_guess = e1.contact_id
         WHERE m.cid_guess IS NULL AND NOT EXISTS (
           SELECT c2.id FROM civicrm_email e2 INNER JOIN civicrm_contact c2 ON e2.contact_id = c2.id
           WHERE e2.email = m.email AND c2.first_name = m.first_name AND c2.last_name = m.last_name
+            AND c2.is_deleted = 0
             AND c2.id != c1.id);
           ")->free();
   }
@@ -251,8 +252,10 @@ class CRM_Mailchimp_Sync {
       'email' => $email,
       'api.Contact.get' => [
         'group' => $this->membership_group_id,
+        'is_deleted' => 0,
         'return' => "first_name,last_name"],
     ]);
+    // @todo filter for not deleted ones.
 
     if ($result['count'] == 1) {
       // The email is only in the database once.
@@ -510,7 +513,7 @@ class CRM_Mailchimp_Sync {
         last_name VARCHAR(100) NOT NULL,
         hash CHAR(32) NOT NULL,
         interests VARCHAR(4096) NOT NULL,
-        cid_guess INT(10) NOT NULL,
+        cid_guess INT(10) DEFAULT NULL,
         PRIMARY KEY (email, hash),
         KEY (cid_guess))
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
@@ -533,7 +536,8 @@ class CRM_Mailchimp_Sync {
         last_name VARCHAR(100) NOT NULL,
         hash CHAR(32) NOT NULL,
         interests VARCHAR(4096) NOT NULL,
-        PRIMARY KEY (email, hash)
+        PRIMARY KEY (email, hash),
+        KEY (contact_id)
         )
         ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
     return $dao;
@@ -778,7 +782,40 @@ class CRM_Mailchimp_Sync {
    * 1. Changes made.
    * 3. Changes not made.
    *
+   * STATS.
+   *
+   * Membership stats are like this:
+   *
+   * MMMMMMMMMMMM
+   *    cccCCCCCCCCCCC
+   * +++JJJ======-----
+   *
+   * first contacts count = existing members (=) + removed members (-)
+   * mailchimp count      = new contacts(+) + joined existing contacts(J) + existing members (=)
+   *
+   * Of the contacts known in both systems (JJJ, ===) how many were updated. We
+   * don't offer any stats on updates beyond this.
+   *
    * @return array With the following keys:
+   * NEW:
+   * - created
+   * - joined
+   * - in_sync
+   * - removed
+   * - updated
+   *
+   * Work in pass 1:
+   *
+   * - create|find
+   * - join
+   * - update names
+   * - update interests
+   *
+   * Work in pass 2:
+   *
+   * - remove
+   *
+   * OLD:
    *  - add_new,
    *  - add_existing,
    *  - unsubscribes,
@@ -795,18 +832,20 @@ class CRM_Mailchimp_Sync {
 
     // Stats.
     $stats = [
-      'add_new'      => 0,
-      'add_existing' => 0,
-      'unsubscribes' => 0,
-      'updates'      => 0,
-      'unchanged'    => 0,
+      'created' => 0,
+      'joined'  => 0,
+      'in_sync' => 0,
+      'removed' => 0,
+      'updated' => 0,
       ];
 
     // all Mailchimp table
     $dao = CRM_Core_DAO::executeQuery( "SELECT m.*,
+      c.contact_id c_contact_id,
       c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name
       FROM tmp_mailchimp_push_m m
       LEFT JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id
+      WHERE m.cid_guess IS NOT NULL
       ;");
 
     // Create lookup hash to map Mailchimp Interest Ids to CiviCRM Groups.
@@ -819,14 +858,22 @@ class CRM_Mailchimp_Sync {
 
     // Stats on a per-contact basis.
     while ($dao->fetch()) {
-      $contact_created = FALSE;
-      $contact_added = FALSE;
       $existing_contact_changed = FALSE;
 
       // Get contact_id and ensure contact details are updated.
       if (!empty($dao->cid_guess)) {
-        // Matched existing contact.
+        // Matched existing contact: result: joined or in_sync
         $contact_id = $dao->cid_guess;
+
+        if ($dao->c_contact_id) {
+          // Contact is already in the membership group.
+          $stats['in_sync']++;
+        }
+        else {
+          // Contact needs joining to the membership group.
+          $stats['joined']++;
+          $changes['additions'][$this->membership_group_id][] = $contact_id;
+        }
 
         // Update the first name and last name of the contacts we know
         // if needed and making sure we don't overwrite
@@ -840,13 +887,6 @@ class CRM_Mailchimp_Sync {
           civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
           $existing_contact_changed = TRUE;
         }
-        // For existing contacts, if the interest groups have not changed then
-        // we're finished now.
-        if ($dao->c_interests == $dao->interests) {
-          // Update the correct statistic.
-          $stats[$existing_contact_changed ? 'updates' : 'unchanged']++;
-          continue;
-        }
       }
       else {
         try {
@@ -859,7 +899,8 @@ class CRM_Mailchimp_Sync {
             'sequential'   => 1,
             ]);
           $contact_id = $result['values'][0]['id'];
-          $contact_created = TRUE;
+          $changes['additions'][$this->membership_group_id][] = $contact_id;
+          $stats['created']++;
         }
         catch (CRM_Mailchimp_DuplicateContactsException $e) {
           // We have absolutely failed to identify this subscriber and there's
@@ -871,47 +912,38 @@ class CRM_Mailchimp_Sync {
         }
       }
 
-      // Groups are different between Mailchimp and CiviCRM.
-      // Unpack the interests reported by MC
-      $mc_interests = unserialize($dao->interests);
-
-      // Get interests from CiviCRM.
-      if ($dao->c_interests) {
-        // This contact is in C and MC, but has differences.
-        // unpack the interests from CiviCRM.
-        $civi_interests = unserialize($dao->c_interests);
+      // Do interests need updating?
+      if ($dao->c_interests && $dao->c_interests == $dao->interests) {
+        // Nothing to change.
       }
       else {
-        // This contact was not found in the CiviCRM table. Therefore they are
-        // not in the membership group. (actually they could have an email
-        // problem as well, but that's OK). Add them into the membership group.
-        $changes['additions'][$this->membership_group_id][] = $contact_id;
-        $contact_added = TRUE;
-
-        // Set interests empty.
-        $civi_interests = array();
-      }
-
-      // Discover what needs changing to bring CiviCRM inline with Mailchimp.
-      foreach ($mc_interests as $interest=>$member_has_interest) {
-        if ($member_has_interest && empty($civi_interests[$interest])) {
-          // Member is interested in something, but CiviCRM does not know yet.
-          $changes['additions'][$interest_to_group_id[$interest]][] = $contact_id;
+        // Unpack the interests reported by MC
+        $mc_interests = unserialize($dao->interests);
+        if ($dao->c_interests) {
+          // Existing contact.
+          $existing_contact_changed = TRUE;
+          $civi_interests = unserialize($dao->c_interests);
         }
-        elseif (!$member_has_interest && !empty($civi_interests[$interest])) {
-          // Member is not interested in something, but CiviCRM thinks it is.
-          $changes['removals'][$interest_to_group_id[$interest]][] = $contact_id;
+        else {
+          // Newly created contact is not in any interest groups.
+          $civi_interests = [];
+        }
+
+        // Discover what needs changing to bring CiviCRM inline with Mailchimp.
+        foreach ($mc_interests as $interest=>$member_has_interest) {
+          if ($member_has_interest && empty($civi_interests[$interest])) {
+            // Member is interested in something, but CiviCRM does not know yet.
+            $changes['additions'][$interest_to_group_id[$interest]][] = $contact_id;
+          }
+          elseif (!$member_has_interest && !empty($civi_interests[$interest])) {
+            // Member is not interested in something, but CiviCRM thinks it is.
+            $changes['removals'][$interest_to_group_id[$interest]][] = $contact_id;
+          }
         }
       }
 
-      if ($contact_created) {
-        $stats['add_new']++;
-      }
-      elseif ($contact_added) {
-        $stats['add_existing']++;
-      }
-      else {
-        $stats['updates']++;
+      if ($existing_contact_changed) {
+        $stats['updated']++;
       }
     }
 
@@ -928,16 +960,37 @@ class CRM_Mailchimp_Sync {
     // Collect the contact_ids that need removing from the membership group.
     while ($dao->fetch()) {
       $changes['removals'][$this->membership_group_id][] =$dao->contact_id;
-      $stats['unsubscribes']++;
+      $stats['removed']++;
     }
 
     // Log group contacts which are going to be added/removed to/from CiviCRM
     CRM_Core_Error::debug_var( 'Mailchimp $changes= ', $changes);
 
+    // Make the changes.
     if ($changes['additions']) {
       // We have some contacts to add into groups...
       foreach($changes['additions'] as $groupID => $contactIDs) {
         CRM_Contact_BAO_GroupContact::addContactsToGroup($contactIDs, $groupID, 'Admin', 'Added');
+        // The bulk add function will fail for contacts that have previously
+        // been 'removed' from the group. So we have to checck for those.
+        $result = civicrm_api3('GroupContact', 'get', [
+          'return' => 'contact_id',
+          'group_id' => $groupID,
+          'status' => 'Removed',
+          'options' => ['limit' => 0],
+          ]);
+        $removed_contacts = array_map(function($_) {return $_['contact_id'];}, $result['values']);
+        $failed_additions = array_intersect($contactIDs, $removed_contacts);
+        if ($failed_additions) {
+          // do these the slow way.
+          foreach ($failed_additions as $contact_id) {
+            $result = civicrm_api3('GroupContact', 'create', [
+              'contact_id' => $contact_id,
+              'group_id' => $groupID,
+              'status' => 'Added',
+              ]);
+          }
+        }
       }
     }
 
@@ -1040,25 +1093,36 @@ class CRM_Mailchimp_Sync {
   public function matchMailchimpMembersToContacts() {
 
     // Do the fast SQL identification against CiviCRM contacts.
-    if ($collect_civicrm_has_run) {
-      // We have done the collection for CiviCRM into the temporary table for
-      // this same list and same mode, so we're safe to figure contacts from
-      // that.
-      static::guessContactIdsBySubscribers();
-    }
+    $start = microtime(TRUE);
+    static::guessContactIdsBySubscribers();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsBySubscribers took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
     static::guessContactIdsByUniqueEmail();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByUniqueEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
     static::guessContactIdsByNameAndEmail();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByNameAndEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
 
     // Now slow match the rest.
-    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess = 0;");
+    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess IS NULL;");
     $db = $dao->getDatabaseConnection();
     $update = $db->prepare('UPDATE tmp_mailchimp_push_m
       SET cid_guess = ? WHERE email = ? AND hash = ?');
     $count = 0;
     while ($dao->fetch()) {
-      $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
-      if ($contact_id) {
-        // Contact found.
+      try {
+        $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
+        if (!$contact_id) {
+          // We use zero to mean create a contact.
+          $contact_id = 0;
+        }
+      }
+      catch (CRM_Mailchimp_DuplicateContactsException $e) {
+        $contact_id = NULL;
+      }
+      if ($contact_id !== NULL) {
+        // Contact found, or a zero (create needed).
         $result = $db->execute($update, [
           $contact_id,
           $dao->email,
@@ -1071,6 +1135,8 @@ class CRM_Mailchimp_Sync {
       }
     }
     $db->freePrepared($update);
+    $took = microtime(TRUE) - $start;
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdSingle took ' . round($took,2) . "s for $count records (" . round($took/$count,2) . "s/record");
     return $count;
   }
   /**

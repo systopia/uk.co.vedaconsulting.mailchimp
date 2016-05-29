@@ -166,7 +166,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
     // Add the slow match process for difficult contacts.
     $ctx->queue->createItem( new CRM_Queue_Task(
-      array('CRM_Mailchimp_Form_Pull', 'syncPullDifficultMatches'),
+      array('CRM_Mailchimp_Form_Pull', 'syncPullMatch'),
       array($listID),
       "$identifier: Matched up contacts. Comparing..."
     ));
@@ -207,7 +207,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
 
     // Nb. collectCiviCrm must have run before we call this.
     $sync = new CRM_Mailchimp_Sync($listID);
-    $stats[$listID]['mc_count'] = $sync->collectMailchimp('pull', $civi_collect_has_already_run=TRUE);
+    $stats[$listID]['mc_count'] = $sync->collectMailchimp('pull');
 
     CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullCollectMailchimp count=', $stats[$listID]['mc_count']);
     static::updatePullStats($stats);
@@ -217,12 +217,12 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
   /**
    * Do the difficult matches.
    */
-  public static function syncPullDifficultMatches(CRM_Queue_TaskContext $ctx, $listID) {
+  public static function syncPullMatch(CRM_Queue_TaskContext $ctx, $listID) {
 
     // Nb. collectCiviCrm must have run before we call this.
     $sync = new CRM_Mailchimp_Sync($listID);
     $c = $sync->matchMailchimpMembersToContacts();
-    CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullDifficultMatches count=', $c);
+    CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Form_Pull syncPullMatch count=', $c);
     return CRM_Queue_Task::TASK_SUCCESS;
   }
 
@@ -262,9 +262,14 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
    */
   public static function updatePullStats($updates) {
     $stats = CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'pull_stats');
-    foreach ($updates as $listId=>$settings) {
+    foreach ($updates as $list_id=>$settings) {
       foreach ($settings as $key=>$val) {
-        $stats[$listId][$key] = $val;
+        if (!empty($stats[$list_id][$key])) {
+          $stats[$list_id][$key] += $val;
+        }
+        else {
+          $stats[$list_id][$key] = $val;
+        }
       }
     }
     CRM_Core_BAO_Setting::setItem($stats, CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'pull_stats');
