@@ -259,14 +259,20 @@ class CRM_Mailchimp_Sync {
     // API call returns all matching emails, and all contacts attached to those
     // emails IF the contact is in our group.
     $result = civicrm_api3('Email', 'get', [
-      'sequential' => 1,
-      'email' => $email,
+      'sequential'      => 1,
+      'email'           => $email,
       'api.Contact.get' => [
-        'group' => $this->membership_group_id,
-        'is_deleted' => 0,
-        'return' => "first_name,last_name"],
+              'group'      => $this->membership_group_id,
+              'is_deleted' => 0,
+              'return'     => "first_name,last_name"],
     ]);
-    // @todo filter for not deleted ones.
+    // Filter the results to only include those with a contact.
+    // This filters out deleted contacts.
+    $result['values'] = array_filter($result['values'], function($_) {
+      return ($_['api.Contact.get']['count'] == 1);
+    });
+    // Correct the 'count':
+    $result['count'] = count($result['values']);
 
     if ($result['count'] == 1) {
       // The email is only in the database once.
@@ -385,7 +391,17 @@ class CRM_Mailchimp_Sync {
   /**
    * Collect CiviCRM data into temporary working table.
    *
-   @todo tidy this - mapped groups sould use interest_groups
+   * Speed notes.
+   *
+   * Various strategies have been tried here to speed things up. Originally we
+   * used the API with a chained API call, but this was very slow (~10s for
+   * ~5k contacts), so now we load all the contacts, then all the emails in a
+   * 2nd API call. This is about 10x faster, taking less than 1s for ~5k
+   * contacts. Likewise the structuring of the emails on the contact array has
+   * been tried various ways, and this structure-by-type way has reduced the
+   * origninal loop time from 7s down to just under 4s.
+   *
+   *
    * @param string $mode pull|push.
    * @return int number of contacts collected.
    */
@@ -424,6 +440,7 @@ class CRM_Mailchimp_Sync {
 
     // Use a nice API call to get the information for tmp_mailchimp_push_c.
     // The API will take care of smart groups.
+    $start = microtime(TRUE);
     $result = civicrm_api3('Contact', 'get', [
       'is_deleted' => 0,
       // The email filter in comment below does not work (CRM-18147)
@@ -438,41 +455,49 @@ class CRM_Mailchimp_Sync {
       'group' => $this->membership_group_id,
       'return' => ['first_name', 'last_name', 'group'],
       'options' => ['limit' => 0],
-      'api.Email.get' => ['on_hold'=>0, 'return'=>'email,is_bulkmail'],
+      //'api.Email.get' => ['on_hold'=>0, 'return'=>'email,is_bulkmail'],
     ]);
+
+    // Load emails for these contacts.
+    $emails = civicrm_api3('Email', 'get', [
+      'on_hold' => 0,
+      'return' => 'contact_id,email,is_bulkmail,is_primary',
+      'contact_id' => ['IN' => array_keys($result['values'])],
+      'options' => ['limit' => 0],
+    ]);
+    // Index emails by contact_id.
+    foreach ($emails['values'] as $email) {
+      if ($email['is_bulkmail']) {
+        $result['values'][$email['contact_id']]['bulk_email'] = $email['email'];
+      }
+      elseif ($email['is_primary']) {
+        $result['values'][$email['contact_id']]['primary_email'] = $email['email'];
+      }
+      else {
+        $result['values'][$email['contact_id']]['other_email'] = $email['email'];
+      }
+    }
+    /**
+     * We have a contact that has no other deets.
+     */
+
+    $start = microtime(TRUE);
 
     $collected = 0;
     // Loop contacts:
-    foreach ($result['values'] as $contact) {
+    foreach ($result['values'] as $id=>$contact) {
       // Which email to use?
-      $email = NULL;
-      $other_emails = [];
-      foreach ($contact['api.Email.get']['values'] as $candidate_email) {
-        if ($candidate_email['is_bulkmail']) {
-          $email = $candidate_email['email'];
-          break;
-        }
-        if ($candidate_email['is_primary']) {
-          array_unshift($other_emails, $candidate_email['email']);
-          break;
-        }
-        else {
-          $other_emails []= $candidate_email['email'];
-        }
+      $email = isset($contact['bulk_email'])
+        ? $contact['bulk_email']
+        : isset($contact['primary_email'])
+          ? $contact['primary_email']
+          : isset($contact['other_email'])
+            ? $contact['other_email']
+            : NULL;
+      if (!$email) {
+        // Hmmm.
+        continue;
       }
-      if (empty($email)) {
-        // Did not find a specific bulk email.
-        if ($other_emails) {
-          // First one is either primary, or there wasn't a primary(!) but there
-          // was something.
-          $email = reset($other_emails);
-        }
-        else {
-          // Hmmm. This contact has no emails.
-          continue;
-        }
-      }
-
 
       // Find out the ID's of the groups the $contact belongs to, and
       // save in $info.
@@ -566,7 +591,9 @@ class CRM_Mailchimp_Sync {
    * @return array of interest_ids to booleans.
    */
   public function getComparableInterestsFromCiviCrmGroups($groups, $mode) {
-    $civi_groups = CRM_Mailchimp_Utils::splitGroupTitles($groups, $this->interest_group_details);
+    $civi_groups = $groups
+      ? array_flip(CRM_Mailchimp_Utils::splitGroupTitles($groups, $this->interest_group_details))
+      : [];
     $info = [];
     foreach ($this->interest_group_details as $civi_group_id => $details) {
       if ($mode == 'pull' && $details['is_mc_update_grouping'] != 1) {
@@ -574,7 +601,7 @@ class CRM_Mailchimp_Sync {
         // CiviCRM.
         continue;
       }
-      $info[$details['interest_id']] = in_array($civi_group_id, $civi_groups);
+      $info[$details['interest_id']] = key_exists($civi_group_id, $civi_groups);
     }
     ksort($info);
     return $info;
