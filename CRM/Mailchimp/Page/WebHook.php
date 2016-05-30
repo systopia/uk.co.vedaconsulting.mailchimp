@@ -121,6 +121,8 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     // Call the appropriate handler method.
     $this->$method();
 
+    // re-set the post hooks.
+    CRM_Mailchimp_Utils::$post_hook_enabled = TRUE;
     // Return OK response.
     return [200, NULL];
   }

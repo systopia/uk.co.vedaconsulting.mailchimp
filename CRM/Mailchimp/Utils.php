@@ -7,6 +7,9 @@ class CRM_Mailchimp_Utils {
   /** Mailchimp API object to use. */
   static protected $mailchimp_api;
 
+  /** Holds runtime cache of group details */
+  static protected $mailchimp_interest_details = [];
+
   /** Holds a cache of list names from Mailchimp */
   static protected $mailchimp_lists;
 
@@ -94,8 +97,14 @@ class CRM_Mailchimp_Utils {
    * the normal API class. You can set the Api object with
    * CRM_Mailchimp_Utils::setMailchimpApi() which is essential for being able to
    * passin mocks for testing.
+   *
+   * @param bool $reset If set it will replace the API object with a default.
+   * Only useful after changing stored credentials.
    */
-  static function getMailchimpApi() {
+  static function getMailchimpApi($reset=FALSE) {
+    if ($reset) {
+      static::$mailchimp_api = NULL;
+    }
 
     // Singleton pattern.
     if (!isset(static::$mailchimp_api)) {
@@ -123,6 +132,14 @@ class CRM_Mailchimp_Utils {
     static::$mailchimp_api = $api;
   }
 
+  /**
+   * Reset caches.
+   */
+  static function resetAllCaches() {
+    static::$mailchimp_api = NULL;
+    static::$mailchimp_lists = NULL;
+    static::$mailchimp_interest_details = [];
+  }
   /**
    * deprecated (soon!) v1 API
    */
@@ -504,7 +521,8 @@ class CRM_Mailchimp_Utils {
       return NULL;
     }
 
-    static $mapper = array();
+    $mapper = &static::$mailchimp_interest_details;
+
     if (!array_key_exists($listID, $mapper)) {
       $mapper[$listID] = array();
 

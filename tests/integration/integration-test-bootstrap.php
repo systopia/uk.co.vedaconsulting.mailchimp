@@ -27,4 +27,4 @@ else {
 }
 // Bootstrap CiviCRM.
 civicrm_initialize();
-require __DIR__ . DIRECTORY_SEPARATOR . 'MailchimpApiIntegrationBase.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'MailchimpApiIntegrationBase.php';

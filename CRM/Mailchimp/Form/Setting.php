@@ -104,7 +104,7 @@ class CRM_Mailchimp_Form_Setting extends CRM_Core_Form {
    */
   public function postProcess() {
     // Store the submitted values in an array.
-    $params = $this->controller->exportValues($this->_name);    
+    $params = $this->controller->exportValues($this->_name);
 
     // Save the API Key & Save the Security Key
     if (CRM_Utils_Array::value('api_key', $params) || CRM_Utils_Array::value('security_key', $params)) {
@@ -121,7 +121,7 @@ class CRM_Mailchimp_Form_Setting extends CRM_Core_Form {
       CRM_Core_BAO_Setting::setItem($params['enable_debugging'], self::MC_SETTING_GROUP, 'enable_debugging');
 
       try {
-        $mcClient = CRM_Mailchimp_Utils::getMailchimpApi();
+        $mcClient = CRM_Mailchimp_Utils::getMailchimpApi(TRUE);
         $response  = $mcClient->get('/');
         if (empty($response->data->account_name)) {
           throw new Exception("Could not retrieve account details, although a response was received. Somthing's not right.");

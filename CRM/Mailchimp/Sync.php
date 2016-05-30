@@ -167,16 +167,21 @@ class CRM_Mailchimp_Sync {
    * got the right contact.
    *
    * This is in a separate method so it can be tested.
+   * @return int affected rows.
    */
   public static function guessContactIdsByUniqueEmail() {
     // If an address is unique, that's the one we need.
-    $result = CRM_Core_DAO::executeQuery(
+    return static::runSqlReturnAffectedRows(
         "UPDATE tmp_mailchimp_push_m m
-          JOIN civicrm_email e1 ON m.email = e1.email INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.is_deleted = 0
-          LEFT JOIN civicrm_email e2 ON m.email = e2.email AND e1.contact_id <> e2.contact_id LEFT JOIN civicrm_contact c2 ON e2.contact_id = c2.id AND c2.is_deleted = 0
-          SET m.cid_guess = e1.contact_id
-          WHERE c2.id IS NULL");
-    $result->free();
+        INNER JOIN (
+          SELECT email, c.id AS contact_id
+          FROM civicrm_email e
+          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
+          GROUP BY email
+          HAVING COUNT(DISTINCT c.id)=1
+          ) uniques ON m.email = uniques.email
+        SET m.cid_guess = uniques.contact_id
+        ");
   }
   /**
    * Guess the contact id for contacts whose only email matches.
@@ -185,23 +190,27 @@ class CRM_Mailchimp_Sync {
    * See issue #188
    *
    * v2 includes rewritten SQL because of a bug that caused the test to fail.
+   * @return int affected rows.
    */
   public static function guessContactIdsByNameAndEmail() {
 
     // In the other case, if we find a unique contact with matching
     // first name, last name and e-mail address, it is probably the one we
     // are looking for as well.
-    CRM_Core_DAO::executeQuery(
-       "UPDATE tmp_mailchimp_push_m m
-        INNER JOIN civicrm_email e1 ON m.email = e1.email
-        INNER JOIN civicrm_contact c1 ON e1.contact_id = c1.id AND c1.first_name = m.first_name AND c1.last_name = m.last_name AND c1.is_deleted = 0
-        SET m.cid_guess = e1.contact_id
-        WHERE m.cid_guess IS NULL AND NOT EXISTS (
-          SELECT c2.id FROM civicrm_email e2 INNER JOIN civicrm_contact c2 ON e2.contact_id = c2.id
-          WHERE e2.email = m.email AND c2.first_name = m.first_name AND c2.last_name = m.last_name
-            AND c2.is_deleted = 0
-            AND c2.id != c1.id);
-          ")->free();
+
+    // look for email and names that match where there's only one match.
+    return static::runSqlReturnAffectedRows(
+        "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN (
+          SELECT email, first_name, last_name, c.id AS contact_id
+          FROM civicrm_email e
+          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
+          GROUP BY email, first_name, last_name
+          HAVING COUNT(DISTINCT c.id)=1
+          ) uniques ON m.email = uniques.email AND m.first_name = uniques.first_name AND m.last_name = uniques.last_name
+        SET m.cid_guess = uniques.contact_id
+        WHERE m.first_name != '' AND m.last_name != ''
+        ");
   }
   /**
    * Guess the contact id for contacts whose email is found in the temporary
@@ -216,13 +225,15 @@ class CRM_Mailchimp_Sync {
    * collectMailchimp().
    *
    * This is in a separate method so it can be tested.
+   *
+   * @return int affected rows.
    */
   public static function guessContactIdsBySubscribers() {
-    CRM_Core_DAO::executeQuery(
+    return static::runSqlReturnAffectedRows(
        "UPDATE tmp_mailchimp_push_m m
         INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
         SET m.cid_guess = c.contact_id
-        WHERE m.cid_guess IS NULL")->free();
+        WHERE m.cid_guess IS NULL");
   }
 
   /**
@@ -971,6 +982,8 @@ class CRM_Mailchimp_Sync {
       // We have some contacts to add into groups...
       foreach($changes['additions'] as $groupID => $contactIDs) {
         CRM_Contact_BAO_GroupContact::addContactsToGroup($contactIDs, $groupID, 'Admin', 'Added');
+        /* I think this is wrong; I think the problem was about deleted contacts.
+
         // The bulk add function will fail for contacts that have previously
         // been 'removed' from the group. So we have to checck for those.
         $result = civicrm_api3('GroupContact', 'get', [
@@ -991,6 +1004,7 @@ class CRM_Mailchimp_Sync {
               ]);
           }
         }
+         */
       }
     }
 
@@ -1251,6 +1265,19 @@ class CRM_Mailchimp_Sync {
       unset($data['interests']);
     }
     $result = $api->put("/lists/$this->list_id/members/$subscriber_hash", $data);
+  }
+  /**
+   * There's probably a better way to do this.
+   */
+  public static function runSqlReturnAffectedRows($sql, $params) {
+    $dao = new CRM_Core_DAO();
+    $q = CRM_Core_DAO::composeQuery($sql, $params);
+    $result = $dao->query($q);
+    if (is_a($result, 'DB_Error')) {
+      throw new Exception ($result->message . "\n" . $result->userinfo);
+    }
+    $dao->free();
+    return $result;
   }
 }
 
