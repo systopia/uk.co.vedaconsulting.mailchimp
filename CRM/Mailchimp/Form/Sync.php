@@ -37,6 +37,19 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
         );
       }
       $this->assign('stats', $output_stats);
+
+      // Load contents of mailchimp_log table.
+      $dao = CRM_Core_DAO::executeQuery("SELECT * FROM mailchimp_log ORDER BY id");
+      $logs = [];
+      while ($dao->fetch()) {
+        $logs []= [
+          'group' => $dao->group_id,
+          'email' => $dao->email,
+          'name' => $dao->name,
+          'message' => $dao->message,
+          ];
+      }
+      $this->assign('error_messages', $logs);
     }
   }
 
@@ -97,6 +110,8 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
   public function postProcess() {
     $vals = $this->_submitValues;
     $runner = self::getRunner(FALSE, $vals['mc_dry_run']);
+    // Clear out log table.
+    CRM_Mailchimp_Sync::dropLogTable();
     if ($runner) {
       // Run Everything in the Queue via the Web.
       $runner->runAllViaWeb();

@@ -18,6 +18,21 @@
       </table>
       {/foreach}
     </div>
+    {if $error_messages}
+    <h2>Error messages</h2>
+    <p>These errors have come from the last sync operation (whether that was a 'pull' or a 'push').</p>
+    <table>
+    <thead><tr><th>Group Id</th><th>Name and Email</th><th>Error</th></tr>
+    </thead>
+    <tbody>
+    {foreach from=$error_messages item=msg}
+      <tr><td>{$msg.group}</td>
+      <td>{$msg.name} {$msg.email}</td>
+      <td>{$msg.message}</td>
+    </tr>
+    {/foreach}
+    </table>
+    {/if}
   {else}
     {$summary}
     {$form.mc_dry_run.html} {$form.mc_dry_run.label}
