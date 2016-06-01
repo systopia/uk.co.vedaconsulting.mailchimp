@@ -160,6 +160,30 @@ class CRM_Mailchimp_Sync {
     return $collected;
   }
   /**
+   * Guess the contact id for contacts whose email is found in the temporary
+   * table made by collectCiviCrm.
+   *
+   * If collectCiviCrm has been run, then we can identify matching contacts very
+   * easily. This avoids problems with multiple contacts in CiviCRM having the
+   * same email address but only one of them is subscribed. :-)
+   *
+   * **WARNING** it would be dangerous to run this if collectCiviCrm() had been run
+   * on a different list(!). For this reason, these conditions are checked by
+   * collectMailchimp().
+   *
+   * This is in a separate method so it can be tested.
+   *
+   * @return int affected rows.
+   */
+  public static function guessContactIdsBySubscribers() {
+    return static::runSqlReturnAffectedRows(
+       "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
+        SET m.cid_guess = c.contact_id
+        WHERE m.cid_guess IS NULL");
+  }
+
+  /**
    * Guess the contact id by there only being one email in CiviCRM that matches.
    *
    * Change in v2.0: it now checks uniqueness by contact id, so if the same
@@ -212,30 +236,6 @@ class CRM_Mailchimp_Sync {
         WHERE m.first_name != '' AND m.last_name != ''
         ");
   }
-  /**
-   * Guess the contact id for contacts whose email is found in the temporary
-   * table made by collectCiviCrm.
-   *
-   * If collectCiviCrm has been run, then we can identify matching contacts very
-   * easily. This avoids problems with multiple contacts in CiviCRM having the
-   * same email address but only one of them is subscribed. :-)
-   *
-   * **WARNING** it would be dangerous to run this if collectCiviCrm() had been run
-   * on a different list(!). For this reason, these conditions are checked by
-   * collectMailchimp().
-   *
-   * This is in a separate method so it can be tested.
-   *
-   * @return int affected rows.
-   */
-  public static function guessContactIdsBySubscribers() {
-    return static::runSqlReturnAffectedRows(
-       "UPDATE tmp_mailchimp_push_m m
-        INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
-        SET m.cid_guess = c.contact_id
-        WHERE m.cid_guess IS NULL");
-  }
-
   /**
    * Identify a contact who is expected to be subscribed to this list.
    *
@@ -1122,18 +1122,36 @@ class CRM_Mailchimp_Sync {
    * First we attempt a number of SQL based strategies as these are the fastest.
    *
    * If the fast SQL matches have failed, we need to do it the slow way.
+   *
+   * @return array of counts - for tests really.
+   * - bySubscribers
+   * - byUniqueEmail
+   * - byNameEmail
+   * - bySingle
+   * - totalMatched
+   * - newContacts (contacts that should be created in CiviCRM)
+   * - failures (duplicate contacts in CiviCRM)
    */
   public function matchMailchimpMembersToContacts() {
 
+    $stats = [
+      'bySubscribers' => 0,
+      'byUniqueEmail' => 0,
+      'byNameEmail' => 0,
+      'bySingle' => 0,
+      'totalMatched' => 0,
+      'newContacts' => 0,
+      'failures' => 0,
+      ];
     // Do the fast SQL identification against CiviCRM contacts.
     $start = microtime(TRUE);
-    static::guessContactIdsBySubscribers();
+    $stats['bySubscribers'] = static::guessContactIdsBySubscribers();
     CRM_Mailchimp_Utils::checkDebug('guessContactIdsBySubscribers took ' . round(microtime(TRUE) - $start, 2) . 's');
     $start = microtime(TRUE);
-    static::guessContactIdsByUniqueEmail();
+    $stats['byUniqueEmail'] = static::guessContactIdsByUniqueEmail();
     CRM_Mailchimp_Utils::checkDebug('guessContactIdsByUniqueEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
     $start = microtime(TRUE);
-    static::guessContactIdsByNameAndEmail();
+    $stats['byNameEmail'] = static::guessContactIdsByNameAndEmail();
     CRM_Mailchimp_Utils::checkDebug('guessContactIdsByNameAndEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
     $start = microtime(TRUE);
 
@@ -1142,17 +1160,23 @@ class CRM_Mailchimp_Sync {
     $db = $dao->getDatabaseConnection();
     $update = $db->prepare('UPDATE tmp_mailchimp_push_m
       SET cid_guess = ? WHERE email = ? AND hash = ?');
-    $count = 0;
+    $failures = $new = 0;
     while ($dao->fetch()) {
       try {
         $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
         if (!$contact_id) {
           // We use zero to mean create a contact.
           $contact_id = 0;
+          $new++;
+        }
+        else {
+          // Successful match.
+          $stats['bySingle']++;
         }
       }
       catch (CRM_Mailchimp_DuplicateContactsException $e) {
         $contact_id = NULL;
+        $failures++;
       }
       if ($contact_id !== NULL) {
         // Contact found, or a zero (create needed).
@@ -1164,13 +1188,16 @@ class CRM_Mailchimp_Sync {
         if ($result instanceof DB_Error) {
           throw new Exception ($result->message . "\n" . $result->userinfo);
         }
-        $count++;
       }
     }
     $db->freePrepared($update);
     $took = microtime(TRUE) - $start;
-    CRM_Mailchimp_Utils::checkDebug('guessContactIdSingle took ' . round($took,2) . "s for $count records (" . round($took/$count,2) . "s/record");
-    return $count;
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdSingle took ' . round($took,2)
+      . "s for $stats[bySingle] records (" . round($took/$stats['bySingle'],2) . "s/record");
+    $stats['totalMatched'] = array_sum($stats);
+    $stats['newContacts'] = $new;
+    $stats['failures'] = $failures;
+    return $stats;
   }
   /**
    * Removes from the temporary tables those records that do not need processing.
