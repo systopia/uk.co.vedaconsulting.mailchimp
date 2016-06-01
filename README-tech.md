@@ -17,10 +17,16 @@ hidden from subscribers at all times.
 One of the challenges is to *identify the CiviCRM* contact that a mailchimp
 member matches. The code for this is centralised in
 `CRM_Mailchimp_Sync::guessContactIdSingle()`, which has tests at
-`MailchimpApiIntegrationMockTest::testGuessContactIdSingle()`. Look at the
-comment block for that test for details of how contats are identified. However,
-this is slow and so for the pull operation there's some SQL shortcuts for
-efficiency - see The "Pull Mailchimp to CiviCRM Sync for a list" heading below.
+`MailchimpApiIntegrationMockTest::testGuessContactIdSingle()`. 
+
+Look at the comment block for that test and for the `guessContactIdSingle`
+method for details of how contacts are identified. However, this is slow and so
+for the bulk operations there's some SQL shortcuts for efficiency which are in the methods:
+
+  - guessContactIdsBySubscribers
+  - guessContactIdsByNameAndEmail
+  - guessContactIdsByUniqueEmail
+
 
 ## About email selection.
 
@@ -213,11 +219,39 @@ The settings page stores details like the API key etc.
 However it also serves to check the mapped groups and lists are properly set up. Specifically it:
 
 - Checks that the list still exists on Mailchimp
-- Checks that the list's webhook is set.
-- Checks that the list's webhook "API" setting is off.
+- Checks that the list's webhook is set and configured exactly.
 
-Warnings are displayed on screen when these settings are wrong.
+Warnings are displayed on screen when these settings are wrong and these include
+a link to the group's settings page, from which you can auto-configure the list
+to the correct settings on Save.
 
 These warnings are tested in `MailchimpApiIntegrationMockTest::testCheckGroupsConfig()`.
 
+
+# "Titanics": Duplicate contacts that can't be sunk!
+
+One thing we can't cope with is duplicate contacts. This is now fairly rare
+because of the more liberal matching of CiviCRM contacts in version 2.0.
+
+Specifically: an email coming from Mailchimp belonged to several contacts and we
+were unable to narrow it down by the names (perhaps there was no name in
+Mailchimp).
+
+On *push*, the temporary mailchimp table has NULL in it for these contacts.
+Normally we would unsubscribe emails from Mailchimp that are not matched in the
+CiviCRM table, but we'll avoid unsubscribing the ones that are NULL.
+
+On *pull*, we will *not* create a contact for NULL `cid_guess` records.
+
+**This means that the contact will stay on Mailchimp unaffected and un-synced by
+any sync operations.** They are therefore un-sync-able.
+
+The alternatives?
+
+1. create new contact. Can't do this; it could result in creating a new contact
+   on every sync, since every creation would cause the duplication to increase.
+
+2. pick one of the matching contacts at random but they could be different
+   people sharing an email so we wouldn't want to merge in any names or
+   interests based on the wrong contact.
 

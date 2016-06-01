@@ -435,6 +435,67 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
     }
   }
 
+  /**
+   */
+  public function testPushDoesNotUnsubscribeDuplicates() {
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
+    $c1 = static::$civicrm_contact_1;
+    $c2 = static::$civicrm_contact_2;
+
+    try {
+      // Add contact1, to the membership group, allowing the posthook to also
+      // subscribe them.
+      $this->joinMembershipGroup($c1);
+
+      // Now remove them without telling Mailchimp
+      $this->removeGroup($c1, static::$civicrm_group_id_membership, TRUE);
+
+      // Now create a duplicate contact by adding the email to the 2nd contact
+      // and changing the last names to be the same and change the first names
+      // so that neither match what Mailchimp has.
+      civicrm_api3('Contact', 'create', [
+        'contact_id' => $c2['contact_id'],
+        'last_name' => $c1['last_name'],
+        ]);
+      civicrm_api3('Contact', 'create', [
+        'contact_id' => $c1['contact_id'],
+        'first_name' => 'New ' . $c1['first_name'],
+        ]);
+      civicrm_api3('Email', 'create', [
+        'contact_id' => $c2['contact_id'],
+        'email' => $c1['email'],
+        'is_bulkmail' => 1,
+        ]);
+
+      // Now sync.
+      $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+      // Collect data from CiviCRM.
+      $sync->collectCiviCrm('push');
+      $this->assertEquals(0, $sync->countCiviCrmMembers());
+      // Collect from Mailchimp.
+      $sync->collectMailchimp('push');
+      $this->assertEquals(1, $sync->countMailchimpMembers());
+      $matches = $sync->matchMailchimpMembersToContacts();
+
+      // Nothing is insync.
+      $in_sync = $sync->removeInSync();
+      $this->assertEquals(0, $in_sync);
+
+      // Send updates to Mailchimp - nothing should be updated.
+      $stats = $sync->updateMailchimpFromCivi();
+      $this->assertEquals(0, $stats['updates']);
+      $this->assertEquals(0, $stats['unsubscribes']);
+    }
+    catch (CRM_Mailchimp_Exception $e) {
+      // Spit out request and response for debugging.
+      print "Request:\n";
+      print_r($e->request);
+      print "Response:\n";
+      print_r($e->response);
+      // re-throw exception.
+      throw $e;
+    }
+  }
 
   /**
    * Test pull updates a records that changed name in Mailchimp.
@@ -870,6 +931,12 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
     }
   }
 
+  /**
+   *
+   */
+  public function testPullIgnoresDuplicates() {
+    $this->fail('test not written');
+  }
 
   /**
    * Check interests are properly mapped as groups are changed and that

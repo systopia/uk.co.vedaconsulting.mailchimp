@@ -244,6 +244,36 @@ class CRM_Mailchimp_Sync {
    * - a possibly new contact, 
    * - a contact that is expected to be in this membership group.
    *
+   * Here's how we match a contact:
+   *
+   * - Only non-deleted contacts are returned.
+   *
+   * - Email is unique in CiviCRM
+   *   Contact identified, unless limited to in-group only and not in group.
+   *
+   * - Email is entered 2+ times, but always on the same contact.
+   *   Contact identified, unless limited to in-group only and not in group.
+   *
+   * - Email belongs to 2+ different contacts. In this situation, if there are
+   *   some contacts that are in the membership group, we ignore the other match
+   *   candidates. If limited to in-group contacts and there aren't any, we give
+   *   up now.
+   *
+   *   - Email identified if it belongs to only one contact that is in the
+   *     membership list.
+   *
+   *   - Look to the candidates whose last name matches.
+   *     - Email identified if there's only one last name match.
+   *     - If there are any contacts that also match first name, return one of
+   *       these. We say it doesn't matter if there's duplicates - just pick
+   *       one since everything matches.
+   *
+   *   - Email identified if there's a single contact that matches on first
+   *     name.
+   *
+   * We fail with a CRM_Mailchimp_DuplicateContactsException if the email
+   * belonged to several contacts and we could not narrow it down by name.
+   *
    * @param string $email
    * @param string|null $first_name
    * @param string|null $last_name
@@ -262,97 +292,75 @@ class CRM_Mailchimp_Sync {
       'sequential'      => 1,
       'email'           => $email,
       'api.Contact.get' => [
-              'group'      => $this->membership_group_id,
               'is_deleted' => 0,
               'return'     => "first_name,last_name"],
     ]);
-    // Filter the results to only include those with a contact.
-    // This filters out deleted contacts.
-    $result['values'] = array_filter($result['values'], function($_) {
+
+    // Candidates are any emails that belong to a not-deleted contact.
+    $email_candidates = array_filter($result['values'], function($_) {
       return ($_['api.Contact.get']['count'] == 1);
     });
-    // Correct the 'count':
-    $result['count'] = count($result['values']);
-
-    if ($result['count'] == 1) {
-      // The email is only in the database once.
-      if ($must_be_on_list) {
-        // We need to check the contact.
-        if ($result['values'][0]['api.Contact.get']['count'] != 1) {
-          // This email belongs to a contact *not* in the group.
-          return NULL;
-        }
-      }
-      // If there's only one one match on this email anyway, then we can assume
-      // that's the person. (we make this assumption in
-      // guessContactIdsByUniqueEmail too.)
-      return $result['values'][0]['contact_id'];
-    }
-    if ($result['count'] == 0) {
+    if (count($email_candidates) == 0) {
       // Never seen that email, mate.
       return NULL;
     }
 
-    // Now we're left with the case that the email matched more than one
-    // different contact. Build some indexes.
+    // $email_candidates is currently a sequential list of emails. Instead map it to
+    // be indexed by contact_id.
     $candidates = [];
-    $in_group = [];
-    foreach ($result['values'] as $candidate) {
-      if ($candidate['api.Contact.get']['count'] == 1) {
-        // This candidate is in the group.
-        $in_group[$candidate['contact_id']] = 1;
+    foreach ($email_candidates as $_) {
+      $candidates[$_['contact_id']] = $_['api.Contact.get']['values'][0];
+    }
+
+    // Now we need to know which, if any of these contacts is in the group.
+    // Build list of contact_ids.
+    $result = civicrm_api3('Contact', 'get', [
+      'group' => $this->membership_group_id,
+      'contact_id' => ['IN' => array_keys($candidates)],
+      'return' => 'contact_id',
+      ]);
+    $in_group = $result['values'];
+
+    // If must be on the membership list, then reduce the candidates to just
+    // those on the list.
+    if ($must_be_on_list) {
+      $candidates = array_intersect_key($candidates, $in_group);
+      if (count($candidates) == 0) {
+        // This email belongs to a contact *not* in the group.
+        return NULL;
       }
-      $candidates[$candidate['contact_id']] = $candidate;
     }
 
     if (count($candidates) == 1) {
-      // All emails belonged to the one contact.
+      // If there's only one one contact match on this email anyway, then we can
+      // assume that's the person. (we make this assumption in
+      // guessContactIdsByUniqueEmail too.)
       return key($candidates);
     }
 
-    // The email belongs to multiple contacts.
-    // If we have some in the group, start looking there.
-    if ($in_group) {
-      if (count($in_group) == 1) {
-        // There's only one contact with this email known to be in this group.
-        // That's enough certainty.
-        return key($in_group);
-      }
-      // There are multiple contacts that share the same email and are all in
-      // this group. Narrow our serach to just those in the group.
-      $candidates = array_intersect_key($candidates, $in_group);
-    }
-    else {
-      // None of the contacts were in the group.
-      if ($must_be_on_list) {
-        // If we're insisting on that, then we can jump ship now.
-        return NULL;
-      }
-      // Because of our API call this
-      // means we won't yet have names for these contacts so we'll grab those
-      // now.
-      $result = civicrm_api3('Email', 'get', [
-        'sequential' => 1,
-        'email' => $email,
-        'api.Contact.get' => [
-          'return' => "first_name,last_name"],
-      ]);
+    // Now we're left with the case that the email matched more than one
+    // different contact.
 
-      $candidates = [];
-      foreach ($result['values'] as $candidate) {
-        $candidates[$candidate['contact_id']] = $candidate;
-      }
+    if (count($in_group) == 1) {
+      // There's only one contact that is in the membership group with this
+      // email, use that.
+      return key($in_group);
+    }
+
+    // The email belongs to multiple contacts.
+    if ($in_group) {
+      // There are multiple contacts that share the same email and several are
+      // in this group. Narrow our serach to just those in the group.
+      $candidates = array_intersect_key($candidates, $in_group);
     }
 
     // Make indexes on names.
     $last_name_matches = $first_name_matches = [];
     foreach ($candidates as $candidate) {
-      $c = $candidate['api.Contact.get']['values'][0];
-
-      if (!empty($c['first_name']) && ($first_name == $c['first_name'])) {
+      if (!empty($candidate['first_name']) && ($first_name == $candidate['first_name'])) {
         $first_name_matches[$candidate['contact_id']] = $candidate;
       }
-      if (!empty($c['last_name']) && ($last_name == $c['last_name'])) {
+      if (!empty($candidate['last_name']) && ($last_name == $candidate['last_name'])) {
         $last_name_matches[$candidate['contact_id']] = $candidate;
       }
     }
@@ -413,7 +421,6 @@ class CRM_Mailchimp_Sync {
     // Cheekily access the database directly to obtain a prepared statement.
     $dao = static::createTemporaryTableForCiviCRM();
     $db = $dao->getDatabaseConnection();
-    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_c VALUES(?, ?, ?, ?, ?, ?)');
 
     //create table for mailchim civicrm syn errors
     $dao = CRM_Core_DAO::executeQuery("CREATE TABLE IF NOT EXISTS mailchimp_civicrm_syn_errors (
@@ -458,6 +465,11 @@ class CRM_Mailchimp_Sync {
       //'api.Email.get' => ['on_hold'=>0, 'return'=>'email,is_bulkmail'],
     ]);
 
+    if ($result['count'] == 0) {
+      // No-one is in the group according to CiviCRM.
+      return 0;
+    }
+
     // Load emails for these contacts.
     $emails = civicrm_api3('Email', 'get', [
       'on_hold' => 0,
@@ -484,16 +496,17 @@ class CRM_Mailchimp_Sync {
     $start = microtime(TRUE);
 
     $collected = 0;
+    $insert = $db->prepare('INSERT INTO tmp_mailchimp_push_c VALUES(?, ?, ?, ?, ?, ?)');
     // Loop contacts:
     foreach ($result['values'] as $id=>$contact) {
       // Which email to use?
       $email = isset($contact['bulk_email'])
         ? $contact['bulk_email']
-        : isset($contact['primary_email'])
+        : (isset($contact['primary_email'])
           ? $contact['primary_email']
-          : isset($contact['other_email'])
+          : (isset($contact['other_email'])
             ? $contact['other_email']
-            : NULL;
+            : NULL));
       if (!$email) {
         // Hmmm.
         continue;
@@ -804,43 +817,24 @@ class CRM_Mailchimp_Sync {
    *
    * 2. Batch add/remove contacts from groups.
    *
-   * Stats are funny here because whereas at mailchimp an unsubscribe or
-   * addition is obvious:
-   *
-   * Adding up these 4 categories should match the number of contacts processed,
-   * excepting any weird errors.
-   *
-   * 1. Additions:
-   *      - New contacts created (and added to membership group)
-   *      - Existing contacts added to membership group.
-   * 2. Existing contacts removed from membership group
-   *
-   * And, for existing contacts:
-   *
-   * 1. Changes made.
-   * 3. Changes not made.
-   *
-   * STATS.
-   *
-   * Membership stats are like this:
-   *
-   * MMMMMMMMMMMM
-   *    cccCCCCCCCCCCC
-   * +++JJJ======-----
-   *
-   * first contacts count = existing members (=) + removed members (-)
-   * mailchimp count      = new contacts(+) + joined existing contacts(J) + existing members (=)
-   *
-   * Of the contacts known in both systems (JJJ, ===) how many were updated. We
-   * don't offer any stats on updates beyond this.
-   *
    * @return array With the following keys:
-   * NEW:
-   * - created
-   * - joined
-   * - in_sync
-   * - removed
-   * - updated
+   *
+   * - created: was in MC not CiviCRM so a new contact was created
+   * - joined : email matched existing contact that was joined to the membership
+   *            group.
+   * - in_sync: was in MC and on membership group already.
+   * - removed: was not in MC but was on membership group, so removed from
+   *            membership group.
+   * - updated: No. in_sync or joined contacts that were updated.
+   *
+   * The initials of these categories c, j, i, r correspond to this diagram:
+   *
+   *     From Mailchimp: ************
+   *     From CiviCRM  :         ********
+   *     Result        : ccccjjjjiiiirrrr
+   *
+   * Of the contacts known in both systems (j, i) we also record how many were
+   * updated (e.g. name, interests).
    *
    * Work in pass 1:
    *
@@ -852,13 +846,6 @@ class CRM_Mailchimp_Sync {
    * Work in pass 2:
    *
    * - remove
-   *
-   * OLD:
-   *  - add_new,
-   *  - add_existing,
-   *  - unsubscribes,
-   *  - unchanged,
-   *  - updates,
    */
   public function updateCiviFromMailchimp() {
 
@@ -877,7 +864,8 @@ class CRM_Mailchimp_Sync {
       'updated' => 0,
       ];
 
-    // all Mailchimp table
+    // all Mailchimp table *except* titanics: where the contact matches multiple
+    // contacts in CiviCRM.
     $dao = CRM_Core_DAO::executeQuery( "SELECT m.*,
       c.contact_id c_contact_id,
       c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name
@@ -1105,15 +1093,19 @@ class CRM_Mailchimp_Sync {
   /**
    * Get list of emails to unsubscribe.
    *
+   * We *exclude* any emails in Mailchimp that matched multiple contacts in
+   * CiviCRM - these have their cid_guess field set to NULL.
+   *
    * @return array
    */
   public function getEmailsNotInCiviButInMailchimp() {
     $dao = CRM_Core_DAO::executeQuery(
       "SELECT m.email
        FROM tmp_mailchimp_push_m m
-       WHERE NOT EXISTS (
-         SELECT c.contact_id FROM tmp_mailchimp_push_c c WHERE c.contact_id = m.cid_guess
-       );");
+       WHERE cid_guess IS NOT NULL
+         AND NOT EXISTS (
+           SELECT c.contact_id FROM tmp_mailchimp_push_c c WHERE c.contact_id = m.cid_guess
+         );");
 
     $emails = [];
     while ($dao->fetch()) {
