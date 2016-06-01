@@ -2,6 +2,9 @@
 
   {if $smarty.get.state eq 'done'}
     <div class="help">
+      {if $dry_run}
+        {ts}<strong>Dry Run: no contacts/members actually changed.</strong>{/ts}
+      {/if}
       {ts}Import completed with result counts as:{/ts}<br/>
       {foreach from=$stats item=group}
       <h2>{$group.name}</h2>
@@ -19,6 +22,7 @@
     </div>
   {else}
     {$summary}
+    {$form.mc_dry_run.html} {$form.mc_dry_run.label}
     <div class="crm-submit-buttons">
       {include file="CRM/common/formButtons.tpl"}
     </div>

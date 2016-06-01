@@ -1,6 +1,9 @@
 <div class="crm-block crm-form-block crm-campaignmonitor-sync-form-block">
   {if $smarty.get.state eq 'done'}
     <div class="help">
+      {if $dry_run}
+        {ts}<strong>Dry Run: no contacts/members actually changed.</strong>{/ts}
+      {/if}
       {ts}Sync completed with result counts as:{/ts}<br/> 
       {foreach from=$stats item=group}
       {assign var="groups" value=$group.stats.group_id|@implode:','}
@@ -17,6 +20,7 @@
     </div>
   {else}
     {$summary}
+    {$form.mc_dry_run.html} {$form.mc_dry_run.label}
     <div class="crm-submit-buttons">
       {include file="CRM/common/formButtons.tpl"}
     </div>

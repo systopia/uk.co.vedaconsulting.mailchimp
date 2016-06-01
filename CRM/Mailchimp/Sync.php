@@ -36,6 +36,8 @@ class CRM_Mailchimp_Sync {
    */
   protected $membership_group_id;
 
+  /** If true no changes will be made to Mailchimp or CiviCRM. */
+  protected $dry_run = FALSE;
   public function __construct($list_id) {
     $this->list_id = $list_id;
     $this->group_details = CRM_Mailchimp_Utils::getGroupsToSync($groupIDs=[], $list_id, $membership_only=FALSE);
@@ -60,7 +62,18 @@ class CRM_Mailchimp_Sync {
     case 'membership_group_id':
     case 'group_details':
     case 'interest_group_details':
+    case 'dry_run':
       return $this->$property;
+    }
+    throw new InvalidArgumentException("'$property' property inaccessible or unknown");
+  }
+  /**
+   * Setter.
+   */
+  public function __set($property, $value) {
+    switch ($property) {
+    case 'dry_run':
+      return $this->$property = (bool) $value;
     }
     throw new InvalidArgumentException("'$property' property inaccessible or unknown");
   }
@@ -422,17 +435,6 @@ class CRM_Mailchimp_Sync {
     $dao = static::createTemporaryTableForCiviCRM();
     $db = $dao->getDatabaseConnection();
 
-    //create table for mailchim civicrm syn errors
-    $dao = CRM_Core_DAO::executeQuery("CREATE TABLE IF NOT EXISTS mailchimp_civicrm_syn_errors (
-        id int(11) NOT NULL AUTO_INCREMENT,
-        email VARCHAR(200),
-        error VARCHAR(200),
-        error_count int(10),
-        group_id int(20),
-        list_id VARCHAR(20),
-        PRIMARY KEY (id)
-        );");
-
     // There used to be a distinction between the handling of 'normal' groups
     // and smart groups. But now the API will take care of this but this
     // requires the following function to have run.
@@ -546,6 +548,16 @@ class CRM_Mailchimp_Sync {
   public static function dropTemporaryTables() {
     CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
     CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
+  }
+  /**
+   * Drop mailchimp_log table if it exists.
+   *
+   * This table holds errors from multiple lists in Mailchimp where the contact
+   * could not be identified in CiviCRM; typically these contacts are
+   * un-sync-able ("Titanics").
+   */
+  public static function dropLogTable() {
+    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS mailchimp_log;");
   }
   /**
    * Create new tmp_mailchimp_push_m.
@@ -728,8 +740,16 @@ class CRM_Mailchimp_Sync {
 
       $params['status'] = 'subscribed';
 
-      // Add the operation to the batch.
-      $operations []= ['PUT', $url_prefix . md5(strtolower($dao->c_email)), $params];
+      if ($this->dry_run) {
+        // Add the operation description.
+        $operations []= "Would " . ($dao->m_email ? 'update' : 'create')
+          . " mailchimp member: $dao->m_email";
+      }
+      else {
+        // Add the operation to the batch.
+        $operations []= ['PUT', $url_prefix . md5(strtolower($dao->c_email)), $params];
+      }
+
       if ($dao->m_email) {
         $changes++;
       } else {
@@ -739,16 +759,29 @@ class CRM_Mailchimp_Sync {
 
     // Now consider deletions of those not in membership group at CiviCRM but
     // there at Mailchimp.
-    $unsubscribes = 0;
-    foreach ($this->getEmailsNotInCiviButInMailchimp() as $email) {
-      $operations []= ['PATCH', $url_prefix . md5(strtolower($email)), ['status' => 'unsubscribed']];
-      $unsubscribes++;
-    }
+    $removals = $this->getEmailsNotInCiviButInMailchimp();
+    $unsubscribes = count($removals);
+    if ($this->dry_run) {
+      if ($unsubscribes) {
+        $operations []= "Would unsubscribe " . count($unsubscribes) . " Mailchimp members: " . implode(', ', $removals);
+      }
+      else {
+        $operations []= "No Mailchimp members would be unsubscribed.";
+      }
 
-    if ($operations) {
-      $api = CRM_Mailchimp_Utils::getMailchimpApi();
-      $result = $api->batchAndWait($operations);
-      // print "Batch results: " . $result->data->response_body_url . "\n";
+      // Save the operations to the log.
+      CRM_Mailchimp_Utils::checkDebug('Dry-Run push update Mailchimp from CiviCRM for group '
+        . $this->membership_group_id, $operations);
+    }
+    else {
+      // For real, not dry run.
+      foreach ($removals as $email) {
+        $operations []= ['PATCH', $url_prefix . md5(strtolower($email)), ['status' => 'unsubscribed']];
+      }
+      if ($operations) {
+        $api = CRM_Mailchimp_Utils::getMailchimpApi();
+        $result = $api->batchAndWait($operations);
+      }
     }
 
     return ['additions' => $additions, 'updates' => $changes, 'unsubscribes' => $unsubscribes];
@@ -854,6 +887,7 @@ class CRM_Mailchimp_Sync {
 
     // This is a functional variable, not a stats. one
     $changes = ['removals' => [], 'additions' => []];
+    $dry_run_log = [];
 
     // Stats.
     $stats = [
@@ -881,12 +915,9 @@ class CRM_Mailchimp_Sync {
     }
 
     // Loop records found at Mailchimp, creating/finding contacts in CiviCRM.
-
-    // Stats on a per-contact basis.
     while ($dao->fetch()) {
       $existing_contact_changed = FALSE;
 
-      // Get contact_id and ensure contact details are updated.
       if (!empty($dao->cid_guess)) {
         // Matched existing contact: result: joined or in_sync
         $contact_id = $dao->cid_guess;
@@ -898,7 +929,14 @@ class CRM_Mailchimp_Sync {
         else {
           // Contact needs joining to the membership group.
           $stats['joined']++;
-          $changes['additions'][$this->membership_group_id][] = $contact_id;
+          if (!$this->dry_run) {
+            // Live.
+            $changes['additions'][$this->membership_group_id][] = $contact_id;
+          }
+          else {
+            // Dry Run.
+            $dry_run_log []= "Would add existing contact to membership group. Email: $dao->email Contact Id: $dao->cid_guess";
+          }
         }
 
         // Update the first name and last name of the contacts we know
@@ -909,14 +947,22 @@ class CRM_Mailchimp_Sync {
           ['first_name' => $dao->c_first_name, 'last_name' => $dao->c_last_name]
         );
         if ($edits) {
-          // There are changes to be made so make them now.
-          civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
+          if (!$this->dry_run) {
+            // There are changes to be made so make them now.
+            civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
+          }
+          else {
+            $dry_run_log []= "Would update CiviCRM contact $dao->cid_guess "
+              . (empty($edits['first_name']) ? '' : "First name from $dao->c_first_name to $dao->first_name ")
+              . (empty($edits['last_name']) ? '' : "Last name from $dao->c_last_name to $dao->last_name ");
+          }
           $existing_contact_changed = TRUE;
         }
       }
       else {
-        try {
-          // Contact does not exist, create a new one.
+        // Contact does not exist, create a new one.
+        if (!$this->dry_run) {
+          // Live:
           $result = civicrm_api3('Contact', 'create', [
             'contact_type' => 'Individual',
             'first_name'   => $dao->first_name,
@@ -926,16 +972,13 @@ class CRM_Mailchimp_Sync {
             ]);
           $contact_id = $result['values'][0]['id'];
           $changes['additions'][$this->membership_group_id][] = $contact_id;
-          $stats['created']++;
         }
-        catch (CRM_Mailchimp_DuplicateContactsException $e) {
-          // We have absolutely failed to identify this subscriber and there's
-          // nothing we can do about it.
-          // We failed to identify/create the contact.
-          // Move on to the next record, nothing we can do here.
-          // @todo have some way to report.
-          continue;
+        else {
+          // Dry Run:
+          $dry_run_log []= "Would create new contact with email: $dao->email, name: $dao->first_name $dao->last_name";
+          $contact_id = 'dry-run';
         }
+        $stats['created']++;
       }
 
       // Do interests need updating?
@@ -959,11 +1002,23 @@ class CRM_Mailchimp_Sync {
         foreach ($mc_interests as $interest=>$member_has_interest) {
           if ($member_has_interest && empty($civi_interests[$interest])) {
             // Member is interested in something, but CiviCRM does not know yet.
-            $changes['additions'][$interest_to_group_id[$interest]][] = $contact_id;
+            if (!$this->dry_run) {
+              $changes['additions'][$interest_to_group_id[$interest]][] = $contact_id;
+            }
+            else {
+              $dry_run_log []= "Would add CiviCRM contact $dao->cid_guess to interest group "
+                . $interest_to_group_id[$interest];
+            }
           }
           elseif (!$member_has_interest && !empty($civi_interests[$interest])) {
             // Member is not interested in something, but CiviCRM thinks it is.
-            $changes['removals'][$interest_to_group_id[$interest]][] = $contact_id;
+            if (!$this->dry_run) {
+              $changes['removals'][$interest_to_group_id[$interest]][] = $contact_id;
+            }
+            else {
+              $dry_run_log []= "Would remove CiviCRM contact $dao->cid_guess from interest group "
+                . $interest_to_group_id[$interest];
+            }
           }
         }
       }
@@ -985,49 +1040,39 @@ class CRM_Mailchimp_Sync {
       ");
     // Collect the contact_ids that need removing from the membership group.
     while ($dao->fetch()) {
-      $changes['removals'][$this->membership_group_id][] =$dao->contact_id;
+      if (!$this->dry_run) {
+        $changes['removals'][$this->membership_group_id][] =$dao->contact_id;
+      }
+      else {
+        $dry_run_log []= "Would remove CiviCRM contact $dao->cid_guess from membership group - no longer subscribed at Mailchimp.";
+      }
       $stats['removed']++;
     }
 
-    // Log group contacts which are going to be added/removed to/from CiviCRM
-    CRM_Core_Error::debug_var( 'Mailchimp $changes= ', $changes);
+    if (!$this->dry_run) {
+      // Log group contacts which are going to be added/removed to/from CiviCRM
+      CRM_Mailchimp_Utils::checkDebug('Mailchimp $changes', $changes);
 
-    // Make the changes.
-    if ($changes['additions']) {
-      // We have some contacts to add into groups...
-      foreach($changes['additions'] as $groupID => $contactIDs) {
-        CRM_Contact_BAO_GroupContact::addContactsToGroup($contactIDs, $groupID, 'Admin', 'Added');
-        /* I think this is wrong; I think the problem was about deleted contacts.
-
-        // The bulk add function will fail for contacts that have previously
-        // been 'removed' from the group. So we have to checck for those.
-        $result = civicrm_api3('GroupContact', 'get', [
-          'return' => 'contact_id',
-          'group_id' => $groupID,
-          'status' => 'Removed',
-          'options' => ['limit' => 0],
-          ]);
-        $removed_contacts = array_map(function($_) {return $_['contact_id'];}, $result['values']);
-        $failed_additions = array_intersect($contactIDs, $removed_contacts);
-        if ($failed_additions) {
-          // do these the slow way.
-          foreach ($failed_additions as $contact_id) {
-            $result = civicrm_api3('GroupContact', 'create', [
-              'contact_id' => $contact_id,
-              'group_id' => $groupID,
-              'status' => 'Added',
-              ]);
-          }
+      // Make the changes.
+      if ($changes['additions']) {
+        // We have some contacts to add into groups...
+        foreach($changes['additions'] as $groupID => $contactIDs) {
+          CRM_Contact_BAO_GroupContact::addContactsToGroup($contactIDs, $groupID, 'Admin', 'Added');
         }
-         */
+      }
+
+      if ($changes['removals']) {
+        // We have some contacts to add into groups...
+        foreach($changes['removals'] as $groupID => $contactIDs) {
+          CRM_Contact_BAO_GroupContact::removeContactsFromGroup($contactIDs, $groupID, 'Admin', 'Removed');
+        }
       }
     }
-
-    if ($changes['removals']) {
-      // We have some contacts to add into groups...
-      foreach($changes['removals'] as $groupID => $contactIDs) {
-        CRM_Contact_BAO_GroupContact::removeContactsFromGroup($contactIDs, $groupID, 'Admin', 'Removed');
-      }
+    else {
+      // Dry run.
+      // Save the operations to the log.
+      CRM_Mailchimp_Utils::checkDebug('Dry-Run pull update CiviCRM from Mailchimp for group '
+        . $this->membership_group_id, $dry_run_log);
     }
 
     // Re-enable the post hooks.
@@ -1134,6 +1179,21 @@ class CRM_Mailchimp_Sync {
    */
   public function matchMailchimpMembersToContacts() {
 
+    // Ensure we have the mailchimp_log table.
+    $dao = CRM_Core_DAO::executeQuery(
+      "CREATE TABLE IF NOT EXISTS mailchimp_log (
+        id int(11) NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        group_id int(20),
+        email VARCHAR(200),
+        name VARCHAR(200),
+        message VARCHAR(512),
+        KEY (group_id)
+        );");
+    // Clear out any old errors to do with this list.
+    CRM_Core_DAO::executeQuery(
+      "DELETE FROM mailchimp_log WHERE group_id = %1;",
+      [1 => [$this->membership_group_id, 'Integer' ]]);
+
     $stats = [
       'bySubscribers' => 0,
       'byUniqueEmail' => 0,
@@ -1197,6 +1257,20 @@ class CRM_Mailchimp_Sync {
     $stats['totalMatched'] = array_sum($stats);
     $stats['newContacts'] = $new;
     $stats['failures'] = $failures;
+
+    if ($stats['failures']) {
+      // Copy errors into the mailchimp_log table.
+      CRM_Core_DAO::executeQuery(
+        "INSERT INTO mailchimp_log (group_id, message)
+         SELECT %1 group_id,
+          email,
+          CONCAT_WS(' ', first_name, last_name) name,
+          'titanic' message
+         FROM tmp_mailchimp_push_m
+         WHERE cid_guess IS NULL;",
+      [1 => [$this->membership_group_id, 'Integer']]);
+    }
+
     return $stats;
   }
   /**
