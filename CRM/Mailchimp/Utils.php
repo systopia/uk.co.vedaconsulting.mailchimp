@@ -499,14 +499,12 @@ class CRM_Mailchimp_Utils {
    *
    * Returns an array like {
    *   [category_id] => array(
-   *     'id' => [category_id],
+   *     'id' => category_id,
+   *     'name' => Category name
    *     'interests' => array(
    *        [interest_id] => array(
-   *          'id' => [interest_id],
-   *          'bit' => ..., ?
-   *          'name' => ...,
-   *          'display_order' => ...,
-   *          'subscribers' => ..., ?
+   *          'id' => interest_id,
+   *          'name' => interest name
    *          ),
    *        ...
    *        ),

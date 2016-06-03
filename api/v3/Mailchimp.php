@@ -36,6 +36,42 @@ function civicrm_api3_mailchimp_getlists($params) {
 }
 
 /**
+ * Get Mailchimp Interests.
+ *
+ * Returns an array whose keys are interest hashes and whose values are
+ * arrays. Nb. Mailchimp now (2016) talks "Interest Categories" which each
+ * contain "Interests". It used to talk of "groupings and groups" which was much
+ * more confusing!
+ *
+ * @param array $params
+ * @return array API result descriptor
+ * @see civicrm_api3_create_success
+ * @see civicrm_api3_create_error
+ * @throws API_Exception
+ */ 
+function civicrm_api3_mailchimp_getinterests($params) {
+  try {
+    $list_id = $params['id'];
+    $results = CRM_Mailchimp_Utils::getMCInterestGroupings($list_id);
+  } 
+  catch (Exception $e) {
+    return array();
+  }
+
+  $interests = [];
+  foreach ($results as $category_id => $category_details) {
+    $interests[$category_id]['id'] = $category_id;
+    $interests[$category_id]['name'] = $category_details['name'];
+    foreach ($category_details['interests'] as $interest_id => $interest_details) {
+      $interests[$category_id]['interests'][$interest_id] = "$category_details[name]::$interest_details[name]";
+    }
+  }
+
+  return civicrm_api3_create_success($interests);
+}
+
+// Deprecated below here.
+/**
  * Mailchimp Get Mailchimp Membercount API
  *
  * @param array $params

@@ -284,7 +284,7 @@ function mailchimp_civicrm_postProcess($formName, &$form) {
   if ($formName == 'CRM_Group_Form_Edit') {
     $vals = $form->_submitValues;
     if (!empty($vals['mc_fixup']) && !empty($vals['mailchimp_list'])
-      && !empty($vals['mc_integration_option']) && $vals['mc_integration_option']>0) {
+      && !empty($vals['mc_integration_option']) && $vals['mc_integration_option'] == 1) {
       // This group is supposed to have Mailchimp integration and the user wants
       // us to check the Mailchimp list is properly configured.
       $messages = CRM_Mailchimp_Utils::configureList($vals['mailchimp_list']);

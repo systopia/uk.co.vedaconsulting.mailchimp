@@ -132,11 +132,11 @@ function populateGroups(list_id, mailing_group_id) {
     mailing_group_id = typeof mailing_group_id !== 'undefined' ?  mailing_group_id : null;
     if (list_id) {
         cj('#mailchimp_group').find('option').remove().end().append('<option value="0">- select -</option>');
-        CRM.api('Mailchimp', 'getgroups', {'id': list_id},
+        CRM.api('Mailchimp', 'getinterests', {'id': list_id},
         {success: function(data) {
             if (data.values) {
                 cj.each(data.values, function(key, value) {
-                    cj.each(value.groups, function(group_key, group_value) {
+                    cj.each(value.interests, function(group_key, group_value) {
                         if (group_key == mailing_group_id) {
                             cj('#mailchimp_group').append(cj("<option selected='selected'></option>").attr("value", key + '|' + group_key).text(group_value)); 
                         } else {
@@ -144,7 +144,7 @@ function populateGroups(list_id, mailing_group_id) {
                         }
                     });
                 });
-            }
+           ['interests'] }
           }
         }
       );
