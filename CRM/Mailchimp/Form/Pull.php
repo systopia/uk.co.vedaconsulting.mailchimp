@@ -153,7 +153,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
     }
     // Setup the Runner
 		$runnerParams = array(
-      'title' => ts('Import From Mailchimp'),
+      'title' => ts('Mailchimp Pull Sync: update CiviCRM from Mailchimp'),
       'queue' => $queue,
       'errorMode'=> CRM_Queue_Runner::ERROR_ABORT,
       'onEndUrl' => CRM_Utils_System::url(self::END_URL, self::END_PARAMS, TRUE, NULL, FALSE),

@@ -36,6 +36,16 @@
     </table>
     {/if}
   {else}
+    <p>{ts}Running this will assume that the information in Mailchimp about who is
+    supposed to be a in the CiviCRM membership group is correct.{/ts}</p>
+    <p>{ts}Points to know:{/ts}</p>
+    <ul>
+      <li>{ts}If a contact is not subscribed at Mailchimp, they will be removed from the CiviCRM membership group (if they were in it).{/ts}</li>
+      <li>{ts}If a contact is subscribed at Mailchimp, they will be added to the CiviCRM membership group (if they were in it). If the contact cannot be found in CiviCRM, a new contact will be created. {/ts}</li>
+      <li>{ts}Any and all CiviCRM groups set up to sync to Mailchimp Interests and configured to allow updates from Mailchimp will be consulted and changes made as needed, adding/removing contacts from these CiviCRM groups.{/ts}</li>
+      <li>{ts}If somone's name is different, the CiviCRM name is replaced by the Mailchimp name (unless there is a name at CiviCRM but no name at Mailchimp).{/ts}</li>
+      <li>{ts}This is a "pull" <em>from</em> Mailchimp operation. You may want the "push" <em>to</em> Mailchimp instead.{/ts}</li>
+    </ul>
     {$summary}
     {$form.mc_dry_run.html} {$form.mc_dry_run.label}
     <div class="crm-submit-buttons">

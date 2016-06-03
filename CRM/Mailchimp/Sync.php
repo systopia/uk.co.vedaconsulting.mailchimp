@@ -139,6 +139,17 @@ class CRM_Mailchimp_Sync {
       foreach ($members as $member) {
         $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : '';
         $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : '';
+
+        if (!$first_name && !$last_name && !empty($member->merge_fields->NAME)) {
+          // No first or last names received, but we have a NAME merge field so
+          // try splitting that.
+          $names = explode(' ', $member->merge_fields->NAME);
+          $first_name = trim(array_shift($names));
+          if ($names) {
+            // Rest of names go as last name.
+            $last_name = implode(' ', $names);
+          }
+        }
         // Find out which of our mapped groups apply to this subscriber.
         // Serialize the grouping array for SQL storage - this is the fastest way.
         $interests = serialize($this->getComparableInterestsFromMailchimp($member->interests, $mode));
@@ -713,6 +724,7 @@ class CRM_Mailchimp_Sync {
   public function updateMailchimpFromCivi() {
 
     $operations = [];
+    $api = CRM_Mailchimp_Utils::getMailchimpApi();
     $dao = CRM_Core_DAO::executeQuery(
       "SELECT
       c.interests c_interests, c.first_name c_first_name, c.last_name c_last_name,
@@ -724,9 +736,17 @@ class CRM_Mailchimp_Sync {
 
     $url_prefix = "/lists/$this->list_id/members/";
     $changes = $additions = 0;
+    // We need to know that the mailchimp list has certain merge fields.
+    $result = $api->get("/lists/$this->list_id/merge-fields", ['fields' => 'merge_fields.tag'])->data->merge_fields;
+    $merge_fields = [];
+    foreach ($result as $field) {
+      $merge_fields[$field->tag] = TRUE;
+    }
+
     while ($dao->fetch()) {
 
       $params = static::updateMailchimpFromCiviLogic(
+        $merge_fields,
         ['email' => $dao->c_email, 'first_name' => $dao->c_first_name, 'last_name' => $dao->c_last_name, 'interests' => $dao->c_interests],
         ['email' => $dao->m_email, 'first_name' => $dao->m_first_name, 'last_name' => $dao->m_last_name, 'interests' => $dao->m_interests]);
 
@@ -738,15 +758,23 @@ class CRM_Mailchimp_Sync {
         continue;
       }
 
-      $params['status'] = 'subscribed';
-
       if ($this->dry_run) {
         // Add the operation description.
-        $operations []= "Would " . ($dao->m_email ? 'update' : 'create')
+        $_ = "Would " . ($dao->m_email ? 'update' : 'create')
           . " mailchimp member: $dao->m_email";
+        if (key_exists('email_address', $params)) {
+          $_ .= " change email to '$params[email_address]'";
+        }
+        if (key_exists('merge_fields', $params)) {
+          foreach ($params['merge_fields'] as $field=>$value) {
+            $_ .= " set $field = $value";
+          }
+        }
+        $operations []= $_;
       }
       else {
         // Add the operation to the batch.
+        $params['status'] = 'subscribed';
         $operations []= ['PUT', $url_prefix . md5(strtolower($dao->c_email)), $params];
       }
 
@@ -779,7 +807,6 @@ class CRM_Mailchimp_Sync {
         $operations []= ['PATCH', $url_prefix . md5(strtolower($email)), ['status' => 'unsubscribed']];
       }
       if ($operations) {
-        $api = CRM_Mailchimp_Utils::getMailchimpApi();
         $result = $api->batchAndWait($operations);
       }
     }
@@ -793,17 +820,22 @@ class CRM_Mailchimp_Sync {
    * This is separate from the method that collects a batch update so that it
    * can be tested more easily.
    *
+   * @param array $merge_fields an array where the *keys* are 'tag' names from
+   * Mailchimp's merge_fields resource. e.g. FNAME, LNAME.
    * @param array $civi_details Array of civicrm details from
    * tmp_mailchimp_push_c
    * @param array $mailchimp_details Array of mailchimp details from
    * tmp_mailchimp_push_m
    * @return array changes in format required by Mailchimp API.
    */
-  public static function updateMailchimpFromCiviLogic($civi_details, $mailchimp_details) {
+  public static function updateMailchimpFromCiviLogic($merge_fields, $civi_details, $mailchimp_details) {
 
     $params = [];
+    // I think possibly some installations don't have Multibyte String Functions
+    // installed?
+    $lower = function_exists('mb_strtolower') ? 'mb_strtolower' : 'strtolower';
 
-    if ($civi_details['email'] && $civi_details['email'] != $mailchimp_details['email']) {
+    if ($civi_details['email'] && $lower($civi_details['email']) != $lower($mailchimp_details['email'])) {
       // This is the case for additions; when we're adding someone new.
       $params['email_address'] = $civi_details['email'];
     }
@@ -821,11 +853,26 @@ class CRM_Mailchimp_Sync {
       }
     }
 
+    $name_changed = FALSE;
     if ($civi_details['first_name'] && $civi_details['first_name'] != $mailchimp_details['first_name']) {
-      $params['merge_fields']['FNAME'] = $civi_details['first_name'];
+      $name_changed = TRUE;
+      // First name mismatch.
+      if (isset($merge_fields['FNAME'])) {
+        // FNAME field exists, so set it.
+        $params['merge_fields']['FNAME'] = $civi_details['first_name'];
+      }
     }
     if ($civi_details['last_name'] && $civi_details['last_name'] != $mailchimp_details['last_name']) {
-      $params['merge_fields']['LNAME'] = $civi_details['last_name'];
+      $name_changed = TRUE;
+      if (isset($merge_fields['LNAME'])) {
+        // LNAME field exists, so set it.
+        $params['merge_fields']['LNAME'] = $civi_details['last_name'];
+      }
+    }
+    if ($name_changed && key_exists('NAME', $merge_fields)) {
+      // The name was changed and this list has a NAME field. Supply first last
+      // names to this field.
+      $params['merge_fields']['NAME'] = trim("$civi_details[first_name] $civi_details[last_name]");
     }
 
     return $params;

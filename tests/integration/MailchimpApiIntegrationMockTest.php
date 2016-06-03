@@ -583,6 +583,79 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
 
   }
   /**
+   * Tests the copying of names from Mailchimp to temp table.
+   *
+   * 1. Check FNAME and LNAME are copied to first_name and last_name.
+   * 2. Repeat check 1 but with presence of populated NAME field also.
+   * 3. Check first and last _name fields are populated from NAME field
+   *    if NAME not empty and FNAME and LNAME are empty.
+   *
+   * @depends testGetMCInterestGroupings
+   */
+  public function testCollectMailchimpParsesNames() {
+
+    // Prepare the mock for the subscription the post hook will do.
+
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $api_prophecy->get("/lists/dummylistid/members", Argument::any())
+      ->shouldBeCalled()
+      ->willReturn(
+        json_decode(json_encode([
+          'http_code' => 200,
+          'data' => [
+            'total_items' => 5,
+            'members' => [
+              [ // "normal" case - FNAME and LNAME fields present.
+                'email_address' => '1@example.com',
+                'interests' => [],
+                'merge_fields' => [
+                  'FNAME' => 'Foo',
+                  'LNAME' => 'Bar',
+                ],
+              ],
+              [ // ALSO has NAME field - which should be ignored if we have vals in FNAME, LNAME
+                'email_address' => '2@example.com',
+                'interests' => [],
+                'merge_fields' => [
+                  'FNAME' => 'Foo',
+                  'LNAME' => 'Bar',
+                  'NAME'  => 'Some other name',
+                ],
+              ],
+              [ // Present: FNAME, LNAME, NAME, but empty FNAME, LNAME - should use NAME
+                'email_address' => '3@example.com',
+                'interests' => [],
+                'merge_fields' => [
+                  'FNAME' => '',
+                  'LNAME' => '',
+                  'NAME'  => 'Foo Bar',
+                ],
+              ],
+              [ // Only a NAME merge field - should extract first and last names from it.
+                'email_address' => '4@example.com',
+                'interests' => [],
+                'merge_fields' => [
+                  'NAME'  => 'Foo Bar',
+                ],
+              ],
+            ]
+          ]])));
+
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+    $sync->collectMailchimp('pull');
+
+    // Test expected results.
+    $dao = CRM_Core_DAO::executeQuery("SELECT * FROM tmp_mailchimp_push_m;");
+    while ($dao->fetch()) {
+      $this->assertEquals(
+        ['Foo', 'Bar'],
+        [$dao->first_name, $dao->last_name],
+        "Error on $dao->email");
+    }
+    $dao->free();
+  }
+  /**
    * Check that list problems are spotted.
    *
    * 1. Test for missing webhooks.

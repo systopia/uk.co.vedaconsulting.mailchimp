@@ -161,7 +161,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
       $task  = new CRM_Queue_Task(
         ['CRM_Mailchimp_Form_Sync', 'syncPushList'],
         [$details['list_id'], $identifier, $dry_run],
-        "Preparing queue for $identifier"
+        "$identifier: collecting data from CiviCRM."
       );
 
       // Add the Task to the Queue
@@ -174,7 +174,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
 
     // Setup the Runner
 		$runnerParams = array(
-      'title' => ts('Mailchimp Sync: CiviCRM to Mailchimp'),
+      'title' => ts('Mailchimp Push Sync: update Mailchimp from CiviCRM'),
       'queue' => $queue,
       'errorMode'=> CRM_Queue_Runner::ERROR_ABORT,
       'onEndUrl' => CRM_Utils_System::url(self::END_URL, self::END_PARAMS, TRUE, NULL, FALSE),
