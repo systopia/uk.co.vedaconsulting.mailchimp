@@ -23,9 +23,26 @@ Look at the comment block for that test and for the `guessContactIdSingle`
 method for details of how contacts are identified. However, this is slow and so
 for the bulk operations there's some SQL shortcuts for efficiency which are in the methods:
 
-  - guessContactIdsBySubscribers
-  - guessContactIdsByNameAndEmail
-  - guessContactIdsByUniqueEmail
+  - `guessContactIdsBySubscribers`
+  - `guessContactIdsByNameAndEmail`
+  - `guessContactIdsByUniqueEmail`
+
+## About Names
+
+Mailchimp lists default to having `FNAME` and `LNAME` merge fields to store
+first and last names. Some people change/delete these merge fields which makes
+things difficult. A common reason is that people wanted a single name field on a
+Mailchimp-provided sign-up form. This extension allows for the existance of a
+`NAME` merge field. Names found here are split automatically (on spaces) with
+the first word becomming the first name and any names following being used as
+last names. See unit tests for conditions and handling of blanks.
+
+A 'pull' sync will split the names and then work as if those names
+were in FNAME, LNAME merge fields, but only if the FNAME/LNAME fields don't
+exist or are both empty.
+
+A 'push' sync will combine the first and last names into a single string and
+submit that to the `NAME` merge field, if it exists.
 
 
 ## About email selection.
