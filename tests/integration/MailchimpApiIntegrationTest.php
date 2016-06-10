@@ -204,7 +204,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // There should not be any in sync records.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // Check that removals (i.e. someone in Mailchimp but not/no longer in
@@ -311,7 +311,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // As the records are not in sync, none should get deleted.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // We don't need to do the actual updateMailchimpFromCivi() call
@@ -345,7 +345,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // As the records are not in sync, none should get deleted.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // Again, we don't yet call updateMailchimpFromCivi() as we do the final
@@ -382,7 +382,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // No records in sync, check this.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // Send updates to Mailchimp.
@@ -407,7 +407,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Verify that they are in deed all in sync:
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(2, $in_sync);
 
     }
@@ -475,7 +475,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
 
       // Are the changes noted? As the records are not in sync, none should get
       // deleted.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // Send updates to Mailchimp.
@@ -542,7 +542,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Nothing is insync.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(0, $in_sync);
 
       // Send updates to Mailchimp - nothing should be updated.
@@ -606,7 +606,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things (both have changed, should be zero)
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
@@ -682,7 +682,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things (both have changed, should be zero)
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
@@ -755,7 +755,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
 
       // Remove in-sync things - should be 1 because except for this change
       // we're not allowed to change, nothing has changed.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(1, $in_sync);
 
       CRM_Mailchimp_Sync::dropTemporaryTables();
@@ -816,7 +816,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things (nothing should be in sync)
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
@@ -903,7 +903,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things (nothing is in sync)
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
@@ -972,7 +972,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things these two should be in-sync.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(1, $in_sync);
     }
     catch (CRM_Mailchimp_Exception $e) {
@@ -1033,7 +1033,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Remove in-sync things - they are not in sync.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Make changes in Civi.
@@ -1092,7 +1092,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
         ], $matches);
 
       // Nothing is insync.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('pull');
       $this->assertEquals(0, $in_sync);
 
       // Update CiviCRM - nothing should be changed.
@@ -1202,7 +1202,7 @@ class MailchimpApiIntegrationTest extends MailchimpApiIntegrationBase {
       $this->assertEquals($civi['hash'], $mc['hash']);
 
       // As the records are in sync, they should be and deleted.
-      $in_sync = $sync->removeInSync();
+      $in_sync = $sync->removeInSync('push');
       $this->assertEquals(1, $in_sync);
 
       // Now check the tables are both empty.

@@ -254,7 +254,7 @@ class CRM_Mailchimp_Form_Pull extends CRM_Core_Form {
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Pull syncPullIgnoreInSync $listID= ', $listID);
 
     $sync = new CRM_Mailchimp_Sync($listID);
-    $stats[$listID]['in_sync'] = $sync->removeInSync();
+    $stats[$listID]['in_sync'] = $sync->removeInSync('pull');
 
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Pull syncPullIgnoreInSync in-sync= ', $stats[$listID]['in_sync']);
     static::updatePullStats($stats);

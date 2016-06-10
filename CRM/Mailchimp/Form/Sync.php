@@ -289,7 +289,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Sync syncPushIgnoreInSync $listID= ', $listID);
 
     $sync = new CRM_Mailchimp_Sync($listID);
-    $stats[$listID]['in_sync'] = $sync->removeInSync();
+    $stats[$listID]['in_sync'] = $sync->removeInSync('push');
 
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Form_Sync syncPushIgnoreInSync $stats[$listID][in_sync]', $stats[$listID]['in_sync']);
     static::updatePushStats($stats);
@@ -310,7 +310,7 @@ class CRM_Mailchimp_Form_Sync extends CRM_Core_Form {
     // this generates updates and unsubscribes
     $stats[$listID] = $sync->updateMailchimpFromCivi();
     // Finally, finish up by removing the two temporary tables
-    CRM_Mailchimp_Sync::dropTemporaryTables();
+    //CRM_Mailchimp_Sync::dropTemporaryTables();
     static::updatePushStats($stats);
 
     return CRM_Queue_Task::TASK_SUCCESS;

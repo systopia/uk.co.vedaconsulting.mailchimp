@@ -722,7 +722,7 @@ class CRM_Mailchimp_Sync {
    * @return array ['updates' => INT, 'unsubscribes' => INT]
    */
   public function updateMailchimpFromCivi() {
-
+    CRM_Mailchimp_Utils::checkDebug("updateMailchimpFromCivi for group #$this->membership_group_id");
     $operations = [];
     $api = CRM_Mailchimp_Utils::getMailchimpApi();
     $dao = CRM_Core_DAO::executeQuery(
@@ -759,7 +759,7 @@ class CRM_Mailchimp_Sync {
       }
 
       if ($this->dry_run) {
-        // Add the operation description.
+        // Log the operation description.
         $_ = "Would " . ($dao->m_email ? 'update' : 'create')
           . " mailchimp member: $dao->m_email";
         if (key_exists('email_address', $params)) {
@@ -770,7 +770,7 @@ class CRM_Mailchimp_Sync {
             $_ .= " set $field = $value";
           }
         }
-        $operations []= $_;
+        CRM_Mailchimp_Utils::checkDebug($_);
       }
       else {
         // Add the operation to the batch.
@@ -790,16 +790,13 @@ class CRM_Mailchimp_Sync {
     $removals = $this->getEmailsNotInCiviButInMailchimp();
     $unsubscribes = count($removals);
     if ($this->dry_run) {
+      // Just log.
       if ($unsubscribes) {
-        $operations []= "Would unsubscribe " . count($unsubscribes) . " Mailchimp members: " . implode(', ', $removals);
+        CRM_Mailchimp_Utils::checkDebug("Would unsubscribe " . count($unsubscribes) . " Mailchimp members: " . implode(', ', $removals));
       }
       else {
-        $operations []= "No Mailchimp members would be unsubscribed.";
+        CRM_Mailchimp_Utils::checkDebug("No Mailchimp members would be unsubscribed.");
       }
-
-      // Save the operations to the log.
-      CRM_Mailchimp_Utils::checkDebug('Dry-Run push update Mailchimp from CiviCRM for group '
-        . $this->membership_group_id, $operations);
     }
     else {
       // For real, not dry run.
@@ -934,7 +931,8 @@ class CRM_Mailchimp_Sync {
 
     // This is a functional variable, not a stats. one
     $changes = ['removals' => [], 'additions' => []];
-    $dry_run_log = [];
+
+    CRM_Mailchimp_Utils::checkDebug("updateCiviFromMailchimp for group #$this->membership_group_id");
 
     // Stats.
     $stats = [
@@ -982,7 +980,7 @@ class CRM_Mailchimp_Sync {
           }
           else {
             // Dry Run.
-            $dry_run_log []= "Would add existing contact to membership group. Email: $dao->email Contact Id: $dao->cid_guess";
+            CRM_Mailchimp_Utils::checkDebug("Would add existing contact to membership group. Email: $dao->email Contact Id: $dao->cid_guess");
           }
         }
 
@@ -999,9 +997,10 @@ class CRM_Mailchimp_Sync {
             civicrm_api3('Contact', 'create', ['id' => $contact_id] + $edits);
           }
           else {
-            $dry_run_log []= "Would update CiviCRM contact $dao->cid_guess "
+            // Dry run.
+            CRM_Mailchimp_Utils::checkDebug("Would update CiviCRM contact $dao->cid_guess "
               . (empty($edits['first_name']) ? '' : "First name from $dao->c_first_name to $dao->first_name ")
-              . (empty($edits['last_name']) ? '' : "Last name from $dao->c_last_name to $dao->last_name ");
+              . (empty($edits['last_name']) ? '' : "Last name from $dao->c_last_name to $dao->last_name "));
           }
           $existing_contact_changed = TRUE;
         }
@@ -1022,7 +1021,7 @@ class CRM_Mailchimp_Sync {
         }
         else {
           // Dry Run:
-          $dry_run_log []= "Would create new contact with email: $dao->email, name: $dao->first_name $dao->last_name";
+          CRM_Mailchimp_Utils::checkDebug("Would create new contact with email: $dao->email, name: $dao->first_name $dao->last_name");
           $contact_id = 'dry-run';
         }
         $stats['created']++;
@@ -1053,8 +1052,8 @@ class CRM_Mailchimp_Sync {
               $changes['additions'][$interest_to_group_id[$interest]][] = $contact_id;
             }
             else {
-              $dry_run_log []= "Would add CiviCRM contact $dao->cid_guess to interest group "
-                . $interest_to_group_id[$interest];
+              CRM_Mailchimp_Utils::checkDebug("Would add CiviCRM contact $dao->cid_guess to interest group "
+                . $interest_to_group_id[$interest]);
             }
           }
           elseif (!$member_has_interest && !empty($civi_interests[$interest])) {
@@ -1063,8 +1062,8 @@ class CRM_Mailchimp_Sync {
               $changes['removals'][$interest_to_group_id[$interest]][] = $contact_id;
             }
             else {
-              $dry_run_log []= "Would remove CiviCRM contact $dao->cid_guess from interest group "
-                . $interest_to_group_id[$interest];
+              CRM_Mailchimp_Utils::checkDebug("Would remove CiviCRM contact $dao->cid_guess from interest group "
+                . $interest_to_group_id[$interest]);
             }
           }
         }
@@ -1091,7 +1090,7 @@ class CRM_Mailchimp_Sync {
         $changes['removals'][$this->membership_group_id][] =$dao->contact_id;
       }
       else {
-        $dry_run_log []= "Would remove CiviCRM contact $dao->cid_guess from membership group - no longer subscribed at Mailchimp.";
+        CRM_Mailchimp_Utils::checkDebug("Would remove CiviCRM contact $dao->contact_id from membership group - no longer subscribed at Mailchimp.");
       }
       $stats['removed']++;
     }
@@ -1114,12 +1113,6 @@ class CRM_Mailchimp_Sync {
           CRM_Contact_BAO_GroupContact::removeContactsFromGroup($contactIDs, $groupID, 'Admin', 'Removed');
         }
       }
-    }
-    else {
-      // Dry run.
-      // Save the operations to the log.
-      CRM_Mailchimp_Utils::checkDebug('Dry-Run pull update CiviCRM from Mailchimp for group '
-        . $this->membership_group_id, $dry_run_log);
     }
 
     // Re-enable the post hooks.
@@ -1321,11 +1314,41 @@ class CRM_Mailchimp_Sync {
     return $stats;
   }
   /**
-   * Removes from the temporary tables those records that do not need processing.
+   * Removes from the temporary tables those records that do not need processing
+   * because they are identical.
    *
+   * In *push* mode this will also remove any rows in the CiviCRM temp table
+   * where there's an email match in the mailchimp table but the cid_guess is
+   * different. This is to cover the case when two contacts in CiviCRM have the
+   * same email and both are added to the membership group. Without this the
+   * Push operation would attempt to craeate a 2nd Mailchimp member but with the
+   * email address that's already on the list. This would mean the names kept
+   * getting flipped around since it would be updating the same member twice -
+   * very confusing.
+   *
+   * So for deleting the contacts from the CiviCRM table on *push* we avoid
+   * this. However on *pull* we leave the contact in the table - they will then
+   * get removed from the group, leaving just the single contact/member with
+   * that particular email address.
+   *
+   * @param string $mode pull|push.
    * @return int
    */
-  public function removeInSync() {
+  public function removeInSync($mode) {
+
+    // In push mode, delete duplicate CiviCRM contacts.
+    $doubles = 0;
+    if ($mode == 'push') {
+      $doubles = CRM_Mailchimp_Sync::runSqlReturnAffectedRows(
+        'DELETE c
+         FROM tmp_mailchimp_push_c c
+         INNER JOIN tmp_mailchimp_push_m m ON c.email=m.email AND m.cid_guess != c.contact_id;
+        ');
+      if ($doubles) {
+        CRM_Mailchimp_Utils::checkDebug("removeInSync removed $doubles contacts who are in the membership group but have the same email address as another contact that is also in the membership group.");
+      }
+    }
+
     // Delete records have the same hash - these do not need an update.
     // count for testing purposes.
     $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
@@ -1336,10 +1359,12 @@ class CRM_Mailchimp_Sync {
       CRM_Core_DAO::executeQuery(
         "DELETE m, c
          FROM tmp_mailchimp_push_m m
-         INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email AND m.hash = c.hash;");
+         INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Form_Sync syncIdentical $count= ', $count);
-    return $count;
+    CRM_Mailchimp_Utils::checkDebug("removeInSync removed $count in-sync contacts.");
+
+
+    return $count + $doubles;
   }
   /**
    * Return a count of the members on Mailchimp from the tmp_mailchimp_push_m
