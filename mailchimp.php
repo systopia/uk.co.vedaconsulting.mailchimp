@@ -35,26 +35,27 @@ function mailchimp_civicrm_install() {
   // Create a cron job to do sync data between CiviCRM and MailChimp.
   $params = array(
     'sequential' => 1,
-    'name'          => 'Mailchimp Sync',
-    'description'   => 'Sync contacts between CiviCRM and MailChimp. Pull from mailchimp is performed before push.',
+    'name'          => 'Mailchimp Push Sync',
+    'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming CiviCRM to be correct. Please understand the implications before using this.',
     'run_frequency' => 'Daily',
     'api_entity'    => 'Mailchimp',
-    'api_action'    => 'sync',
+    'api_action'    => 'pushsync',
     'is_active'     => 0,
   );
   $result = civicrm_api3('job', 'create', $params);
   
-  // create a pull job
-  /*$params = array(
+
+  // Create Pull Sync job.
+  $params = array(
     'sequential' => 1,
-    'name'          => 'Mailchimp Pull',
-    'description'   => 'Pull contacts from mailchimp to civi.',
+    'name'          => 'Mailchimp Pull Sync',
+    'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming Mailchimp to be correct. Please understand the implications before using this.',
     'run_frequency' => 'Daily',
     'api_entity'    => 'Mailchimp',
-    'api_action'    => 'pull',
+    'api_action'    => 'pullsync',
     'is_active'     => 0,
   );
-  $result = civicrm_api3('job', 'create', $params);*/
+  $result = civicrm_api3('job', 'create', $params);
 
   return _mailchimp_civix_civicrm_install();
 }
