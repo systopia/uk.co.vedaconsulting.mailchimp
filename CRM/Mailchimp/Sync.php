@@ -77,6 +77,7 @@ class CRM_Mailchimp_Sync {
     }
     throw new InvalidArgumentException("'$property' property inaccessible or unknown");
   }
+  // The following methods are the key steps of the pull and push syncs.
   /**
    * Collect Mailchimp data into temporary working table.
    *
@@ -184,243 +185,6 @@ class CRM_Mailchimp_Sync {
     fclose($handle);
     $db->freePrepared($insert);
     return $collected;
-  }
-  /**
-   * Guess the contact id for contacts whose email is found in the temporary
-   * table made by collectCiviCrm.
-   *
-   * If collectCiviCrm has been run, then we can identify matching contacts very
-   * easily. This avoids problems with multiple contacts in CiviCRM having the
-   * same email address but only one of them is subscribed. :-)
-   *
-   * **WARNING** it would be dangerous to run this if collectCiviCrm() had been run
-   * on a different list(!). For this reason, these conditions are checked by
-   * collectMailchimp().
-   *
-   * This is in a separate method so it can be tested.
-   *
-   * @return int affected rows.
-   */
-  public static function guessContactIdsBySubscribers() {
-    return static::runSqlReturnAffectedRows(
-       "UPDATE tmp_mailchimp_push_m m
-        INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
-        SET m.cid_guess = c.contact_id
-        WHERE m.cid_guess IS NULL");
-  }
-
-  /**
-   * Guess the contact id by there only being one email in CiviCRM that matches.
-   *
-   * Change in v2.0: it now checks uniqueness by contact id, so if the same
-   * email belongs multiple times to one contact, we can still conclude we've
-   * got the right contact.
-   *
-   * This is in a separate method so it can be tested.
-   * @return int affected rows.
-   */
-  public static function guessContactIdsByUniqueEmail() {
-    // If an address is unique, that's the one we need.
-    return static::runSqlReturnAffectedRows(
-        "UPDATE tmp_mailchimp_push_m m
-        INNER JOIN (
-          SELECT email, c.id AS contact_id
-          FROM civicrm_email e
-          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
-          GROUP BY email
-          HAVING COUNT(DISTINCT c.id)=1
-          ) uniques ON m.email = uniques.email
-        SET m.cid_guess = uniques.contact_id
-        ");
-  }
-  /**
-   * Guess the contact id for contacts whose only email matches.
-   *
-   * This is in a separate method so it can be tested.
-   * See issue #188
-   *
-   * v2 includes rewritten SQL because of a bug that caused the test to fail.
-   * @return int affected rows.
-   */
-  public static function guessContactIdsByNameAndEmail() {
-
-    // In the other case, if we find a unique contact with matching
-    // first name, last name and e-mail address, it is probably the one we
-    // are looking for as well.
-
-    // look for email and names that match where there's only one match.
-    return static::runSqlReturnAffectedRows(
-        "UPDATE tmp_mailchimp_push_m m
-        INNER JOIN (
-          SELECT email, first_name, last_name, c.id AS contact_id
-          FROM civicrm_email e
-          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
-          GROUP BY email, first_name, last_name
-          HAVING COUNT(DISTINCT c.id)=1
-          ) uniques ON m.email = uniques.email AND m.first_name = uniques.first_name AND m.last_name = uniques.last_name
-        SET m.cid_guess = uniques.contact_id
-        WHERE m.first_name != '' AND m.last_name != ''
-        ");
-  }
-  /**
-   * Identify a contact who is expected to be subscribed to this list.
-   *
-   * This is used in a couple of cases, for finding a contact from incomming
-   * data for:
-   * - a possibly new contact, 
-   * - a contact that is expected to be in this membership group.
-   *
-   * Here's how we match a contact:
-   *
-   * - Only non-deleted contacts are returned.
-   *
-   * - Email is unique in CiviCRM
-   *   Contact identified, unless limited to in-group only and not in group.
-   *
-   * - Email is entered 2+ times, but always on the same contact.
-   *   Contact identified, unless limited to in-group only and not in group.
-   *
-   * - Email belongs to 2+ different contacts. In this situation, if there are
-   *   some contacts that are in the membership group, we ignore the other match
-   *   candidates. If limited to in-group contacts and there aren't any, we give
-   *   up now.
-   *
-   *   - Email identified if it belongs to only one contact that is in the
-   *     membership list.
-   *
-   *   - Look to the candidates whose last name matches.
-   *     - Email identified if there's only one last name match.
-   *     - If there are any contacts that also match first name, return one of
-   *       these. We say it doesn't matter if there's duplicates - just pick
-   *       one since everything matches.
-   *
-   *   - Email identified if there's a single contact that matches on first
-   *     name.
-   *
-   * We fail with a CRM_Mailchimp_DuplicateContactsException if the email
-   * belonged to several contacts and we could not narrow it down by name.
-   *
-   * @param string $email
-   * @param string|null $first_name
-   * @param string|null $last_name
-   * @param bool $must_be_on_list    If TRUE, only return an ID if this contact
-   *                                 is known to be on the list. defaults to
-   *                                 FALSE. 
-   * @throw CRM_Mailchimp_DuplicateContactsException if the email is known bit
-   * it fails to identify one contact.
-   * @return int|null Contact Id if found.
-   */
-  public function guessContactIdSingle($email, $first_name=NULL, $last_name=NULL, $must_be_on_list=FALSE) {
-
-    // API call returns all matching emails, and all contacts attached to those
-    // emails IF the contact is in our group.
-    $result = civicrm_api3('Email', 'get', [
-      'sequential'      => 1,
-      'email'           => $email,
-      'api.Contact.get' => [
-              'is_deleted' => 0,
-              'return'     => "first_name,last_name"],
-    ]);
-
-    // Candidates are any emails that belong to a not-deleted contact.
-    $email_candidates = array_filter($result['values'], function($_) {
-      return ($_['api.Contact.get']['count'] == 1);
-    });
-    if (count($email_candidates) == 0) {
-      // Never seen that email, mate.
-      return NULL;
-    }
-
-    // $email_candidates is currently a sequential list of emails. Instead map it to
-    // be indexed by contact_id.
-    $candidates = [];
-    foreach ($email_candidates as $_) {
-      $candidates[$_['contact_id']] = $_['api.Contact.get']['values'][0];
-    }
-
-    // Now we need to know which, if any of these contacts is in the group.
-    // Build list of contact_ids.
-    $result = civicrm_api3('Contact', 'get', [
-      'group' => $this->membership_group_id,
-      'contact_id' => ['IN' => array_keys($candidates)],
-      'return' => 'contact_id',
-      ]);
-    $in_group = $result['values'];
-
-    // If must be on the membership list, then reduce the candidates to just
-    // those on the list.
-    if ($must_be_on_list) {
-      $candidates = array_intersect_key($candidates, $in_group);
-      if (count($candidates) == 0) {
-        // This email belongs to a contact *not* in the group.
-        return NULL;
-      }
-    }
-
-    if (count($candidates) == 1) {
-      // If there's only one one contact match on this email anyway, then we can
-      // assume that's the person. (we make this assumption in
-      // guessContactIdsByUniqueEmail too.)
-      return key($candidates);
-    }
-
-    // Now we're left with the case that the email matched more than one
-    // different contact.
-
-    if (count($in_group) == 1) {
-      // There's only one contact that is in the membership group with this
-      // email, use that.
-      return key($in_group);
-    }
-
-    // The email belongs to multiple contacts.
-    if ($in_group) {
-      // There are multiple contacts that share the same email and several are
-      // in this group. Narrow our serach to just those in the group.
-      $candidates = array_intersect_key($candidates, $in_group);
-    }
-
-    // Make indexes on names.
-    $last_name_matches = $first_name_matches = [];
-    foreach ($candidates as $candidate) {
-      if (!empty($candidate['first_name']) && ($first_name == $candidate['first_name'])) {
-        $first_name_matches[$candidate['contact_id']] = $candidate;
-      }
-      if (!empty($candidate['last_name']) && ($last_name == $candidate['last_name'])) {
-        $last_name_matches[$candidate['contact_id']] = $candidate;
-      }
-    }
-
-    // Now see if we can find them by name match.
-    if ($last_name_matches) {
-      // Some of the contacts have the same last name.
-      if (count($last_name_matches) == 1) {
-        // Only one contact with this email has the same last name, let's say
-        // it's them.
-        return key($last_name_matches);
-      }
-      // Multiple contacts with same last name. Reduce by same first name.
-      $last_name_matches = array_intersect_key($last_name_matches, $first_name_matches);
-      if (count($last_name_matches) > 0) {
-        // Either there was only one with same last and first name.
-        // Or, there were multiple contacts, but they have the same email and
-        // name so let's say that we're safe enough to pick the first one of
-        // them.
-        return key($last_name_matches);
-      }
-    }
-    // Last name didn't get there. Final chance. If the email and first name
-    // match a single contact, we'll grudgingly(!) say that's OK.
-    if (count($first_name_matches) == 1) {
-      // Only one contact with this email has the same first name, let's say
-      // it's them.
-      return key($first_name_matches);
-    }
-
-    // The email given belonged to several contacts and we were unable to narrow
-    // it down by the names, either. There's nothing we can do here, it's going
-    // to get messy.
-    throw new CRM_Mailchimp_DuplicateContactsException($candidates);
   }
   /**
    * Collect CiviCRM data into temporary working table.
@@ -552,187 +316,172 @@ class CRM_Mailchimp_Sync {
     return $collected;
   }
   /**
-   * Drop tmp_mailchimp_push_m and tmp_mailchimp_push_c, if they exist.
+   * Match mailchimp records to particular contacts in CiviCRM.
    *
-   * Those tables are created by collectMailchimp() and collectCiviCrm()
-   * for the purposes of syncing to/from Mailchimp/CiviCRM and are not needed
-   * outside of those operations.
+   * This requires that both collect functions have been run in the same mode
+   * (push/pull).
+   *
+   * First we attempt a number of SQL based strategies as these are the fastest.
+   *
+   * If the fast SQL matches have failed, we need to do it the slow way.
+   *
+   * @return array of counts - for tests really.
+   * - bySubscribers
+   * - byUniqueEmail
+   * - byNameEmail
+   * - bySingle
+   * - totalMatched
+   * - newContacts (contacts that should be created in CiviCRM)
+   * - failures (duplicate contacts in CiviCRM)
    */
-  public static function dropTemporaryTables() {
-    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
-    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
-  }
-  /**
-   * Drop mailchimp_log table if it exists.
-   *
-   * This table holds errors from multiple lists in Mailchimp where the contact
-   * could not be identified in CiviCRM; typically these contacts are
-   * un-sync-able ("Titanics").
-   */
-  public static function dropLogTable() {
-    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS mailchimp_log;");
-  }
-  /**
-   * Create new tmp_mailchimp_push_m.
-   *
-   * Nb. these are temporary tables but we don't use TEMPORARY table because
-   * they are needed over multiple sessions because of queue.
-   *
-   *
-   * cid_guess column is the contact id that this record will be sync-ed to.
-   * It after both collections and a matchMailchimpMembersToContacts call it
-   * will be
-   *
-   * - A contact id
-   * - Zero meaning we can create a new contact
-   * - NULL meaning we must ignore this because otherwise we might end up
-   *   making endless duplicates.
-   *
-   * Because a lot of matching is done on this, it has an index. Nb. a test was
-   * done trying the idea of adding the non-unique key at the end of the
-   * collection; heavily-keyed tables can slow down mass-inserts, so sometimes's
-   * it's quicker to add an index after an update. However this only saved 0.1s
-   * over 5,000 records import, so this code was removed for the sake of KISS.
-   *
-   * The speed of collecting from Mailchimp, is, as you might expect, determined
-   * by Mailchimp's API which seems to take about 3s for 1,000 records.
-   * Inserting them into the tmp table takes about 1s per 1,000 records on my
-   * server, so about 4s/1000 members.
-   */
-  public static function createTemporaryTableForMailchimp() {
-    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
+  public function matchMailchimpMembersToContacts() {
+
+    // Ensure we have the mailchimp_log table.
     $dao = CRM_Core_DAO::executeQuery(
-      "CREATE TABLE tmp_mailchimp_push_m (
-        email VARCHAR(200) NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        hash CHAR(32) NOT NULL,
-        interests VARCHAR(4096) NOT NULL,
-        cid_guess INT(10) DEFAULT NULL,
-        PRIMARY KEY (email, hash),
-        KEY (cid_guess))
-        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+      "CREATE TABLE IF NOT EXISTS mailchimp_log (
+        id int(11) NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        group_id int(20),
+        email VARCHAR(200),
+        name VARCHAR(200),
+        message VARCHAR(512),
+        KEY (group_id)
+        );");
+    // Clear out any old errors to do with this list.
+    CRM_Core_DAO::executeQuery(
+      "DELETE FROM mailchimp_log WHERE group_id = %1;",
+      [1 => [$this->membership_group_id, 'Integer' ]]);
 
-    // Convenience in collectMailchimp.
-    return $dao;
+    $stats = [
+      'bySubscribers' => 0,
+      'byUniqueEmail' => 0,
+      'byNameEmail' => 0,
+      'bySingle' => 0,
+      'totalMatched' => 0,
+      'newContacts' => 0,
+      'failures' => 0,
+      ];
+    // Do the fast SQL identification against CiviCRM contacts.
+    $start = microtime(TRUE);
+    $stats['bySubscribers'] = static::guessContactIdsBySubscribers();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsBySubscribers took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
+    $stats['byUniqueEmail'] = static::guessContactIdsByUniqueEmail();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByUniqueEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
+    $stats['byNameEmail'] = static::guessContactIdsByNameAndEmail();
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByNameAndEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
+    $start = microtime(TRUE);
+
+    // Now slow match the rest.
+    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess IS NULL;");
+    $db = $dao->getDatabaseConnection();
+    $update = $db->prepare('UPDATE tmp_mailchimp_push_m
+      SET cid_guess = ? WHERE email = ? AND hash = ?');
+    $failures = $new = 0;
+    while ($dao->fetch()) {
+      try {
+        $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
+        if (!$contact_id) {
+          // We use zero to mean create a contact.
+          $contact_id = 0;
+          $new++;
+        }
+        else {
+          // Successful match.
+          $stats['bySingle']++;
+        }
+      }
+      catch (CRM_Mailchimp_DuplicateContactsException $e) {
+        $contact_id = NULL;
+        $failures++;
+      }
+      if ($contact_id !== NULL) {
+        // Contact found, or a zero (create needed).
+        $result = $db->execute($update, [
+          $contact_id,
+          $dao->email,
+          $dao->hash,
+        ]);
+        if ($result instanceof DB_Error) {
+          throw new Exception ($result->message . "\n" . $result->userinfo);
+        }
+      }
+    }
+    $db->freePrepared($update);
+    $took = microtime(TRUE) - $start;
+    CRM_Mailchimp_Utils::checkDebug('guessContactIdSingle took ' . round($took,2)
+      . "s for $stats[bySingle] records (" . round($took/$stats['bySingle'],2) . "s/record");
+    $stats['totalMatched'] = array_sum($stats);
+    $stats['newContacts'] = $new;
+    $stats['failures'] = $failures;
+
+    if ($stats['failures']) {
+      // Copy errors into the mailchimp_log table.
+      CRM_Core_DAO::executeQuery(
+        "INSERT INTO mailchimp_log (group_id, message)
+         SELECT %1 group_id,
+          email,
+          CONCAT_WS(' ', first_name, last_name) name,
+          'titanic' message
+         FROM tmp_mailchimp_push_m
+         WHERE cid_guess IS NULL;",
+      [1 => [$this->membership_group_id, 'Integer']]);
+    }
+
+    return $stats;
   }
   /**
-   * Create new tmp_mailchimp_push_c.
+   * Removes from the temporary tables those records that do not need processing
+   * because they are identical.
    *
-   * Nb. these are temporary tables but we don't use TEMPORARY table because
-   * they are needed over multiple sessions because of queue.
-   */
-  public static function createTemporaryTableForCiviCRM() {
-    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
-    $dao = CRM_Core_DAO::executeQuery("CREATE TABLE tmp_mailchimp_push_c (
-        contact_id INT(10) UNSIGNED NOT NULL,
-        email VARCHAR(200) NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        hash CHAR(32) NOT NULL,
-        interests VARCHAR(4096) NOT NULL,
-        PRIMARY KEY (email, hash),
-        KEY (contact_id)
-        )
-        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
-    return $dao;
-  }
-  /**
-   * Convert a 'groups' string as provided by CiviCRM's API to a structured
-   * array of arrays whose keys are Mailchimp interest ids and whos value is
-   * boolean.
+   * In *push* mode this will also remove any rows in the CiviCRM temp table
+   * where there's an email match in the mailchimp table but the cid_guess is
+   * different. This is to cover the case when two contacts in CiviCRM have the
+   * same email and both are added to the membership group. Without this the
+   * Push operation would attempt to craeate a 2nd Mailchimp member but with the
+   * email address that's already on the list. This would mean the names kept
+   * getting flipped around since it would be updating the same member twice -
+   * very confusing.
    *
-   * Nb. this is then key-sorted, which results in a standardised array for
-   * comparison.
+   * So for deleting the contacts from the CiviCRM table on *push* we avoid
+   * this. However on *pull* we leave the contact in the table - they will then
+   * get removed from the group, leaving just the single contact/member with
+   * that particular email address.
    *
-   * @param string $groups as returned by CiviCRM's API.
    * @param string $mode pull|push.
-   * @return array of interest_ids to booleans.
+   * @return int
    */
-  public function getComparableInterestsFromCiviCrmGroups($groups, $mode) {
-    $civi_groups = $groups
-      ? array_flip(CRM_Mailchimp_Utils::splitGroupTitles($groups, $this->interest_group_details))
-      : [];
-    $info = [];
-    foreach ($this->interest_group_details as $civi_group_id => $details) {
-      if ($mode == 'pull' && $details['is_mc_update_grouping'] != 1) {
-        // This group is configured to disallow updates from Mailchimp to
-        // CiviCRM.
-        continue;
-      }
-      $info[$details['interest_id']] = key_exists($civi_group_id, $civi_groups);
-    }
-    ksort($info);
-    return $info;
-  }
+  public function removeInSync($mode) {
 
-  /**
-   * Convert interests object received from the Mailchimp API into
-   * a structure identical to that produced by
-   * getComparableInterestsFromCiviCrmGroups.
-   *
-   * Note this will only return information about interests mapped in CiviCRM.
-   * Any other interests that may have been created on Mailchimp are not
-   * included here.
-   *
-   * @param object $interests 'interests' as returned by GET
-   * /list/.../members/...?fields=interests
-   * @param string $mode pull|push.
-   */
-  public function getComparableInterestsFromMailchimp($interests, $mode) {
-    $info = [];
-    // If pulling data from Mailchimp to CiviCRM we ignore any changes to
-    // interests where such changes are disallowed by configuration.
-    $ignore_non_updatables = $mode == 'pull';
-    foreach ($this->interest_group_details as $details) {
-      if ($ignore_non_updatables && $details['is_mc_update_grouping'] != 1) {
-        // This group is configured to disallow updates from Mailchimp to
-        // CiviCRM.
-        continue;
-      }
-      $info[$details['interest_id']] = !empty($interests->{$details['interest_id']});
-    }
-    ksort($info);
-    return $info;
-  }
-
-  /**
-   * Convert a 'groups' string as provided by Mailchimp's Webhook request API to
-   * an array of CiviCRM group ids.
-   *
-   * Nb. a Mailchimp webhook is the equivalent of a 'pull' operation so we
-   * ignore any groups that Mailchimp is not allowed to update.
-   *
-   * @param string $groups as returned by Mailchimp's merges.INTERESTS request
-   * data.
-   * @return array of interest_ids to booleans.
-   */
-  public function splitMailchimpWebhookGroupsToCiviGroupIds($group_input) {
-
-    // Create a map of Mailchimp interest names to Civi Groups.
-    $map = [];
-    foreach ($this->interest_group_details as $group_id => $details) {
-      if ($details['is_mc_update_grouping'] == 1) {
-        // This group is configured to allow updates from Mailchimp to CiviCRM.
-        $map[$details['interest_name']] = $group_id;
-      }
-    }
-    // Sort longest strings first.
-    uksort($map, function($a, $b) { return strlen($a) - strlen($b); });
-
-    // Remove the found titles longest first.
-    $groups = [];
-    $group_input = ",$group_input,";
-    foreach ($map as $interest_name => $civi_group_id) {
-      $i = strpos($group_input, ",$interest_name,");
-      if ($i !== FALSE) {
-        $groups[] = $civi_group_id;
-        // Remove this from the string.
-        $group_input = substr($group_input, 0, $i+1) . substr($group_input, $i + strlen(",$interest_group_details,"));
+    // In push mode, delete duplicate CiviCRM contacts.
+    $doubles = 0;
+    if ($mode == 'push') {
+      $doubles = CRM_Mailchimp_Sync::runSqlReturnAffectedRows(
+        'DELETE c
+         FROM tmp_mailchimp_push_c c
+         INNER JOIN tmp_mailchimp_push_m m ON c.email=m.email AND m.cid_guess != c.contact_id;
+        ');
+      if ($doubles) {
+        CRM_Mailchimp_Utils::checkDebug("removeInSync removed $doubles contacts who are in the membership group but have the same email address as another contact that is also in the membership group.");
       }
     }
 
-    return $groups;
+    // Delete records have the same hash - these do not need an update.
+    // count for testing purposes.
+    $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
+      INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
+    $dao->fetch();
+    $count = $dao->co;
+    if ($count > 0) {
+      CRM_Core_DAO::executeQuery(
+        "DELETE m, c
+         FROM tmp_mailchimp_push_m m
+         INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
+    }
+    CRM_Mailchimp_Utils::checkDebug("removeInSync removed $count in-sync contacts.");
+
+
+    return $count + $doubles;
   }
   /**
    * "Push" sync.
@@ -832,70 +581,6 @@ class CRM_Mailchimp_Sync {
     }
 
     return ['additions' => $additions, 'updates' => $changes, 'unsubscribes' => $unsubscribes];
-  }
-
-  /**
-   * Logic to determine update needed.
-   *
-   * This is separate from the method that collects a batch update so that it
-   * can be tested more easily.
-   *
-   * @param array $merge_fields an array where the *keys* are 'tag' names from
-   * Mailchimp's merge_fields resource. e.g. FNAME, LNAME.
-   * @param array $civi_details Array of civicrm details from
-   * tmp_mailchimp_push_c
-   * @param array $mailchimp_details Array of mailchimp details from
-   * tmp_mailchimp_push_m
-   * @return array changes in format required by Mailchimp API.
-   */
-  public static function updateMailchimpFromCiviLogic($merge_fields, $civi_details, $mailchimp_details) {
-
-    $params = [];
-    // I think possibly some installations don't have Multibyte String Functions
-    // installed?
-    $lower = function_exists('mb_strtolower') ? 'mb_strtolower' : 'strtolower';
-
-    if ($civi_details['email'] && $lower($civi_details['email']) != $lower($mailchimp_details['email'])) {
-      // This is the case for additions; when we're adding someone new.
-      $params['email_address'] = $civi_details['email'];
-    }
-
-    if ($civi_details['interests'] && $civi_details['interests'] != $mailchimp_details['interests']) {
-      // Civi's Interest field will unpack to an empty array if we don't have
-      // any mapped interest groups. In this case we don't need to send the
-      // interests to Mailchimp at all, so we check for that.
-      // In the case of adding a new person from CiviCRM to Mailchimp, the
-      // Mailchimp interests passed in will be empty, but the CiviCRM one will
-      // be 'a:0:{}' since that is the serialized version of [].
-      $interests = unserialize($civi_details['interests']);
-      if (!empty($interests)) {
-        $params['interests'] = $interests;
-      }
-    }
-
-    $name_changed = FALSE;
-    if ($civi_details['first_name'] && $civi_details['first_name'] != $mailchimp_details['first_name']) {
-      $name_changed = TRUE;
-      // First name mismatch.
-      if (isset($merge_fields['FNAME'])) {
-        // FNAME field exists, so set it.
-        $params['merge_fields']['FNAME'] = $civi_details['first_name'];
-      }
-    }
-    if ($civi_details['last_name'] && $civi_details['last_name'] != $mailchimp_details['last_name']) {
-      $name_changed = TRUE;
-      if (isset($merge_fields['LNAME'])) {
-        // LNAME field exists, so set it.
-        $params['merge_fields']['LNAME'] = $civi_details['last_name'];
-      }
-    }
-    if ($name_changed && key_exists('NAME', $merge_fields)) {
-      // The name was changed and this list has a NAME field. Supply first last
-      // names to this field.
-      $params['merge_fields']['NAME'] = trim("$civi_details[first_name] $civi_details[last_name]");
-    }
-
-    return $params;
   }
 
   /**
@@ -1143,61 +828,105 @@ class CRM_Mailchimp_Sync {
 
     return $stats;
   }
+
+  // Other methods follow.
   /**
-   * Logic to determine update needed for pull.
+   * Convert a 'groups' string as provided by CiviCRM's API to a structured
+   * array of arrays whose keys are Mailchimp interest ids and whos value is
+   * boolean.
    *
-   * This is separate from the method that collects a batch update so that it
-   * can be tested more easily.
+   * Nb. this is then key-sorted, which results in a standardised array for
+   * comparison.
    *
-   * @param array $mailchimp_details Array of mailchimp details from
-   * tmp_mailchimp_push_m, with keys first_name, last_name
-   * @param array $civi_details Array of civicrm details from
-   * tmp_mailchimp_push_c, with keys first_name, last_name
-   * @return array changes in format required by Mailchimp API.
+   * @param string $groups as returned by CiviCRM's API.
+   * @param string $mode pull|push.
+   * @return array of interest_ids to booleans.
    */
-  public static function updateCiviFromMailchimpContactLogic($mailchimp_details, $civi_details) {
-
-    $edits = [];
-
-    foreach (['first_name', 'last_name'] as $field) {
-      if ($mailchimp_details[$field] && $mailchimp_details[$field] != $civi_details[$field]) {
-        $edits[$field] = $mailchimp_details[$field];
+  public function getComparableInterestsFromCiviCrmGroups($groups, $mode) {
+    $civi_groups = $groups
+      ? array_flip(CRM_Mailchimp_Utils::splitGroupTitles($groups, $this->interest_group_details))
+      : [];
+    $info = [];
+    foreach ($this->interest_group_details as $civi_group_id => $details) {
+      if ($mode == 'pull' && $details['is_mc_update_grouping'] != 1) {
+        // This group is configured to disallow updates from Mailchimp to
+        // CiviCRM.
+        continue;
       }
+      $info[$details['interest_id']] = key_exists($civi_group_id, $civi_groups);
     }
-
-    return $edits;
+    ksort($info);
+    return $info;
   }
 
   /**
-   * Update first name and last name of the contacts of which we already
-   * know the contact id.
+   * Convert interests object received from the Mailchimp API into
+   * a structure identical to that produced by
+   * getComparableInterestsFromCiviCrmGroups.
+   *
+   * Note this will only return information about interests mapped in CiviCRM.
+   * Any other interests that may have been created on Mailchimp are not
+   * included here.
+   *
+   * @param object $interests 'interests' as returned by GET
+   * /list/.../members/...?fields=interests
+   * @param string $mode pull|push.
    */
-  public function updateGuessedContactDetails() {
-    // In theory I could do this with one SQL join statement, but this way
-    // we would bypass user defined hooks. So I will use the API, but only
-    // in the case that the names are really different. This will save
-    // some expensive API calls. See issue #188.
-
-    $dao = CRM_Core_DAO::executeQuery(
-      "SELECT c.id, m.first_name, m.last_name
-       FROM tmp_mailchimp_push_m m
-       JOIN civicrm_contact c ON m.cid_guess = c.id
-       WHERE m.first_name NOT IN ('', COALESCE(c.first_name, ''))
-          OR m.last_name  NOT IN ('', COALESCE(c.last_name,  ''))");
-
-    while ($dao->fetch()) {
-      $params = array('id' => $dao->id);
-      if ($dao->first_name) {
-        $params['first_name'] = $dao->first_name;
+  public function getComparableInterestsFromMailchimp($interests, $mode) {
+    $info = [];
+    // If pulling data from Mailchimp to CiviCRM we ignore any changes to
+    // interests where such changes are disallowed by configuration.
+    $ignore_non_updatables = $mode == 'pull';
+    foreach ($this->interest_group_details as $details) {
+      if ($ignore_non_updatables && $details['is_mc_update_grouping'] != 1) {
+        // This group is configured to disallow updates from Mailchimp to
+        // CiviCRM.
+        continue;
       }
-      if ($dao->last_name) {
-        $params['last_name'] = $dao->last_name;
-      }
-      civicrm_api3('Contact', 'create', $params);
+      $info[$details['interest_id']] = !empty($interests->{$details['interest_id']});
     }
-    $dao->free();
+    ksort($info);
+    return $info;
   }
 
+  /**
+   * Convert a 'groups' string as provided by Mailchimp's Webhook request API to
+   * an array of CiviCRM group ids.
+   *
+   * Nb. a Mailchimp webhook is the equivalent of a 'pull' operation so we
+   * ignore any groups that Mailchimp is not allowed to update.
+   *
+   * @param string $groups as returned by Mailchimp's merges.INTERESTS request
+   * data.
+   * @return array of interest_ids to booleans.
+   */
+  public function splitMailchimpWebhookGroupsToCiviGroupIds($group_input) {
+
+    // Create a map of Mailchimp interest names to Civi Groups.
+    $map = [];
+    foreach ($this->interest_group_details as $group_id => $details) {
+      if ($details['is_mc_update_grouping'] == 1) {
+        // This group is configured to allow updates from Mailchimp to CiviCRM.
+        $map[$details['interest_name']] = $group_id;
+      }
+    }
+    // Sort longest strings first.
+    uksort($map, function($a, $b) { return strlen($a) - strlen($b); });
+
+    // Remove the found titles longest first.
+    $groups = [];
+    $group_input = ",$group_input,";
+    foreach ($map as $interest_name => $civi_group_id) {
+      $i = strpos($group_input, ",$interest_name,");
+      if ($i !== FALSE) {
+        $groups[] = $civi_group_id;
+        // Remove this from the string.
+        $group_input = substr($group_input, 0, $i+1) . substr($group_input, $i + strlen(",$interest_group_details,"));
+      }
+    }
+
+    return $groups;
+  }
   /**
    * Get list of emails to unsubscribe.
    *
@@ -1220,174 +949,6 @@ class CRM_Mailchimp_Sync {
       $emails[] = $dao->email;
     }
     return $emails;
-  }
-  /**
-   * Match mailchimp records to particular contacts in CiviCRM.
-   *
-   * This requires that both collect functions have been run in the same mode
-   * (push/pull).
-   *
-   * First we attempt a number of SQL based strategies as these are the fastest.
-   *
-   * If the fast SQL matches have failed, we need to do it the slow way.
-   *
-   * @return array of counts - for tests really.
-   * - bySubscribers
-   * - byUniqueEmail
-   * - byNameEmail
-   * - bySingle
-   * - totalMatched
-   * - newContacts (contacts that should be created in CiviCRM)
-   * - failures (duplicate contacts in CiviCRM)
-   */
-  public function matchMailchimpMembersToContacts() {
-
-    // Ensure we have the mailchimp_log table.
-    $dao = CRM_Core_DAO::executeQuery(
-      "CREATE TABLE IF NOT EXISTS mailchimp_log (
-        id int(11) NOT NULL AUTO_INCREMENT PRIMARY KEY,
-        group_id int(20),
-        email VARCHAR(200),
-        name VARCHAR(200),
-        message VARCHAR(512),
-        KEY (group_id)
-        );");
-    // Clear out any old errors to do with this list.
-    CRM_Core_DAO::executeQuery(
-      "DELETE FROM mailchimp_log WHERE group_id = %1;",
-      [1 => [$this->membership_group_id, 'Integer' ]]);
-
-    $stats = [
-      'bySubscribers' => 0,
-      'byUniqueEmail' => 0,
-      'byNameEmail' => 0,
-      'bySingle' => 0,
-      'totalMatched' => 0,
-      'newContacts' => 0,
-      'failures' => 0,
-      ];
-    // Do the fast SQL identification against CiviCRM contacts.
-    $start = microtime(TRUE);
-    $stats['bySubscribers'] = static::guessContactIdsBySubscribers();
-    CRM_Mailchimp_Utils::checkDebug('guessContactIdsBySubscribers took ' . round(microtime(TRUE) - $start, 2) . 's');
-    $start = microtime(TRUE);
-    $stats['byUniqueEmail'] = static::guessContactIdsByUniqueEmail();
-    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByUniqueEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
-    $start = microtime(TRUE);
-    $stats['byNameEmail'] = static::guessContactIdsByNameAndEmail();
-    CRM_Mailchimp_Utils::checkDebug('guessContactIdsByNameAndEmail took ' . round(microtime(TRUE) - $start, 2) . 's');
-    $start = microtime(TRUE);
-
-    // Now slow match the rest.
-    $dao = CRM_Core_DAO::executeQuery( "SELECT * FROM tmp_mailchimp_push_m m WHERE cid_guess IS NULL;");
-    $db = $dao->getDatabaseConnection();
-    $update = $db->prepare('UPDATE tmp_mailchimp_push_m
-      SET cid_guess = ? WHERE email = ? AND hash = ?');
-    $failures = $new = 0;
-    while ($dao->fetch()) {
-      try {
-        $contact_id = $this->guessContactIdSingle($dao->email, $dao->first_name, $dao->last_name);
-        if (!$contact_id) {
-          // We use zero to mean create a contact.
-          $contact_id = 0;
-          $new++;
-        }
-        else {
-          // Successful match.
-          $stats['bySingle']++;
-        }
-      }
-      catch (CRM_Mailchimp_DuplicateContactsException $e) {
-        $contact_id = NULL;
-        $failures++;
-      }
-      if ($contact_id !== NULL) {
-        // Contact found, or a zero (create needed).
-        $result = $db->execute($update, [
-          $contact_id,
-          $dao->email,
-          $dao->hash,
-        ]);
-        if ($result instanceof DB_Error) {
-          throw new Exception ($result->message . "\n" . $result->userinfo);
-        }
-      }
-    }
-    $db->freePrepared($update);
-    $took = microtime(TRUE) - $start;
-    CRM_Mailchimp_Utils::checkDebug('guessContactIdSingle took ' . round($took,2)
-      . "s for $stats[bySingle] records (" . round($took/$stats['bySingle'],2) . "s/record");
-    $stats['totalMatched'] = array_sum($stats);
-    $stats['newContacts'] = $new;
-    $stats['failures'] = $failures;
-
-    if ($stats['failures']) {
-      // Copy errors into the mailchimp_log table.
-      CRM_Core_DAO::executeQuery(
-        "INSERT INTO mailchimp_log (group_id, message)
-         SELECT %1 group_id,
-          email,
-          CONCAT_WS(' ', first_name, last_name) name,
-          'titanic' message
-         FROM tmp_mailchimp_push_m
-         WHERE cid_guess IS NULL;",
-      [1 => [$this->membership_group_id, 'Integer']]);
-    }
-
-    return $stats;
-  }
-  /**
-   * Removes from the temporary tables those records that do not need processing
-   * because they are identical.
-   *
-   * In *push* mode this will also remove any rows in the CiviCRM temp table
-   * where there's an email match in the mailchimp table but the cid_guess is
-   * different. This is to cover the case when two contacts in CiviCRM have the
-   * same email and both are added to the membership group. Without this the
-   * Push operation would attempt to craeate a 2nd Mailchimp member but with the
-   * email address that's already on the list. This would mean the names kept
-   * getting flipped around since it would be updating the same member twice -
-   * very confusing.
-   *
-   * So for deleting the contacts from the CiviCRM table on *push* we avoid
-   * this. However on *pull* we leave the contact in the table - they will then
-   * get removed from the group, leaving just the single contact/member with
-   * that particular email address.
-   *
-   * @param string $mode pull|push.
-   * @return int
-   */
-  public function removeInSync($mode) {
-
-    // In push mode, delete duplicate CiviCRM contacts.
-    $doubles = 0;
-    if ($mode == 'push') {
-      $doubles = CRM_Mailchimp_Sync::runSqlReturnAffectedRows(
-        'DELETE c
-         FROM tmp_mailchimp_push_c c
-         INNER JOIN tmp_mailchimp_push_m m ON c.email=m.email AND m.cid_guess != c.contact_id;
-        ');
-      if ($doubles) {
-        CRM_Mailchimp_Utils::checkDebug("removeInSync removed $doubles contacts who are in the membership group but have the same email address as another contact that is also in the membership group.");
-      }
-    }
-
-    // Delete records have the same hash - these do not need an update.
-    // count for testing purposes.
-    $dao = CRM_Core_DAO::executeQuery("SELECT COUNT(c.email) co FROM tmp_mailchimp_push_m m
-      INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
-    $dao->fetch();
-    $count = $dao->co;
-    if ($count > 0) {
-      CRM_Core_DAO::executeQuery(
-        "DELETE m, c
-         FROM tmp_mailchimp_push_m m
-         INNER JOIN tmp_mailchimp_push_c c ON m.cid_guess = c.contact_id AND m.hash = c.hash;");
-    }
-    CRM_Mailchimp_Utils::checkDebug("removeInSync removed $count in-sync contacts.");
-
-
-    return $count + $doubles;
   }
   /**
    * Return a count of the members on Mailchimp from the tmp_mailchimp_push_m
@@ -1481,6 +1042,418 @@ class CRM_Mailchimp_Sync {
     }
     $result = $api->put("/lists/$this->list_id/members/$subscriber_hash", $data);
   }
+  /**
+   * Identify a contact who is expected to be subscribed to this list.
+   *
+   * This is used in a couple of cases, for finding a contact from incomming
+   * data for:
+   * - a possibly new contact, 
+   * - a contact that is expected to be in this membership group.
+   *
+   * Here's how we match a contact:
+   *
+   * - Only non-deleted contacts are returned.
+   *
+   * - Email is unique in CiviCRM
+   *   Contact identified, unless limited to in-group only and not in group.
+   *
+   * - Email is entered 2+ times, but always on the same contact.
+   *   Contact identified, unless limited to in-group only and not in group.
+   *
+   * - Email belongs to 2+ different contacts. In this situation, if there are
+   *   some contacts that are in the membership group, we ignore the other match
+   *   candidates. If limited to in-group contacts and there aren't any, we give
+   *   up now.
+   *
+   *   - Email identified if it belongs to only one contact that is in the
+   *     membership list.
+   *
+   *   - Look to the candidates whose last name matches.
+   *     - Email identified if there's only one last name match.
+   *     - If there are any contacts that also match first name, return one of
+   *       these. We say it doesn't matter if there's duplicates - just pick
+   *       one since everything matches.
+   *
+   *   - Email identified if there's a single contact that matches on first
+   *     name.
+   *
+   * We fail with a CRM_Mailchimp_DuplicateContactsException if the email
+   * belonged to several contacts and we could not narrow it down by name.
+   *
+   * @param string $email
+   * @param string|null $first_name
+   * @param string|null $last_name
+   * @param bool $must_be_on_list    If TRUE, only return an ID if this contact
+   *                                 is known to be on the list. defaults to
+   *                                 FALSE. 
+   * @throw CRM_Mailchimp_DuplicateContactsException if the email is known bit
+   * it fails to identify one contact.
+   * @return int|null Contact Id if found.
+   */
+  public function guessContactIdSingle($email, $first_name=NULL, $last_name=NULL, $must_be_on_list=FALSE) {
+
+    // API call returns all matching emails, and all contacts attached to those
+    // emails IF the contact is in our group.
+    $result = civicrm_api3('Email', 'get', [
+      'sequential'      => 1,
+      'email'           => $email,
+      'api.Contact.get' => [
+              'is_deleted' => 0,
+              'return'     => "first_name,last_name"],
+    ]);
+
+    // Candidates are any emails that belong to a not-deleted contact.
+    $email_candidates = array_filter($result['values'], function($_) {
+      return ($_['api.Contact.get']['count'] == 1);
+    });
+    if (count($email_candidates) == 0) {
+      // Never seen that email, mate.
+      return NULL;
+    }
+
+    // $email_candidates is currently a sequential list of emails. Instead map it to
+    // be indexed by contact_id.
+    $candidates = [];
+    foreach ($email_candidates as $_) {
+      $candidates[$_['contact_id']] = $_['api.Contact.get']['values'][0];
+    }
+
+    // Now we need to know which, if any of these contacts is in the group.
+    // Build list of contact_ids.
+    $result = civicrm_api3('Contact', 'get', [
+      'group' => $this->membership_group_id,
+      'contact_id' => ['IN' => array_keys($candidates)],
+      'return' => 'contact_id',
+      ]);
+    $in_group = $result['values'];
+
+    // If must be on the membership list, then reduce the candidates to just
+    // those on the list.
+    if ($must_be_on_list) {
+      $candidates = array_intersect_key($candidates, $in_group);
+      if (count($candidates) == 0) {
+        // This email belongs to a contact *not* in the group.
+        return NULL;
+      }
+    }
+
+    if (count($candidates) == 1) {
+      // If there's only one one contact match on this email anyway, then we can
+      // assume that's the person. (we make this assumption in
+      // guessContactIdsByUniqueEmail too.)
+      return key($candidates);
+    }
+
+    // Now we're left with the case that the email matched more than one
+    // different contact.
+
+    if (count($in_group) == 1) {
+      // There's only one contact that is in the membership group with this
+      // email, use that.
+      return key($in_group);
+    }
+
+    // The email belongs to multiple contacts.
+    if ($in_group) {
+      // There are multiple contacts that share the same email and several are
+      // in this group. Narrow our serach to just those in the group.
+      $candidates = array_intersect_key($candidates, $in_group);
+    }
+
+    // Make indexes on names.
+    $last_name_matches = $first_name_matches = [];
+    foreach ($candidates as $candidate) {
+      if (!empty($candidate['first_name']) && ($first_name == $candidate['first_name'])) {
+        $first_name_matches[$candidate['contact_id']] = $candidate;
+      }
+      if (!empty($candidate['last_name']) && ($last_name == $candidate['last_name'])) {
+        $last_name_matches[$candidate['contact_id']] = $candidate;
+      }
+    }
+
+    // Now see if we can find them by name match.
+    if ($last_name_matches) {
+      // Some of the contacts have the same last name.
+      if (count($last_name_matches) == 1) {
+        // Only one contact with this email has the same last name, let's say
+        // it's them.
+        return key($last_name_matches);
+      }
+      // Multiple contacts with same last name. Reduce by same first name.
+      $last_name_matches = array_intersect_key($last_name_matches, $first_name_matches);
+      if (count($last_name_matches) > 0) {
+        // Either there was only one with same last and first name.
+        // Or, there were multiple contacts, but they have the same email and
+        // name so let's say that we're safe enough to pick the first one of
+        // them.
+        return key($last_name_matches);
+      }
+    }
+    // Last name didn't get there. Final chance. If the email and first name
+    // match a single contact, we'll grudgingly(!) say that's OK.
+    if (count($first_name_matches) == 1) {
+      // Only one contact with this email has the same first name, let's say
+      // it's them.
+      return key($first_name_matches);
+    }
+
+    // The email given belonged to several contacts and we were unable to narrow
+    // it down by the names, either. There's nothing we can do here, it's going
+    // to get messy.
+    throw new CRM_Mailchimp_DuplicateContactsException($candidates);
+  }
+  /**
+   * Guess the contact id for contacts whose email is found in the temporary
+   * table made by collectCiviCrm.
+   *
+   * If collectCiviCrm has been run, then we can identify matching contacts very
+   * easily. This avoids problems with multiple contacts in CiviCRM having the
+   * same email address but only one of them is subscribed. :-)
+   *
+   * **WARNING** it would be dangerous to run this if collectCiviCrm() had been run
+   * on a different list(!). For this reason, these conditions are checked by
+   * collectMailchimp().
+   *
+   * This is in a separate method so it can be tested.
+   *
+   * @return int affected rows.
+   */
+  public static function guessContactIdsBySubscribers() {
+    return static::runSqlReturnAffectedRows(
+       "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN tmp_mailchimp_push_c c ON m.email = c.email
+        SET m.cid_guess = c.contact_id
+        WHERE m.cid_guess IS NULL");
+  }
+
+  /**
+   * Guess the contact id by there only being one email in CiviCRM that matches.
+   *
+   * Change in v2.0: it now checks uniqueness by contact id, so if the same
+   * email belongs multiple times to one contact, we can still conclude we've
+   * got the right contact.
+   *
+   * This is in a separate method so it can be tested.
+   * @return int affected rows.
+   */
+  public static function guessContactIdsByUniqueEmail() {
+    // If an address is unique, that's the one we need.
+    return static::runSqlReturnAffectedRows(
+        "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN (
+          SELECT email, c.id AS contact_id
+          FROM civicrm_email e
+          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
+          GROUP BY email
+          HAVING COUNT(DISTINCT c.id)=1
+          ) uniques ON m.email = uniques.email
+        SET m.cid_guess = uniques.contact_id
+        ");
+  }
+  /**
+   * Guess the contact id for contacts whose only email matches.
+   *
+   * This is in a separate method so it can be tested.
+   * See issue #188
+   *
+   * v2 includes rewritten SQL because of a bug that caused the test to fail.
+   * @return int affected rows.
+   */
+  public static function guessContactIdsByNameAndEmail() {
+
+    // In the other case, if we find a unique contact with matching
+    // first name, last name and e-mail address, it is probably the one we
+    // are looking for as well.
+
+    // look for email and names that match where there's only one match.
+    return static::runSqlReturnAffectedRows(
+        "UPDATE tmp_mailchimp_push_m m
+        INNER JOIN (
+          SELECT email, first_name, last_name, c.id AS contact_id
+          FROM civicrm_email e
+          JOIN civicrm_contact c ON e.contact_id = c.id AND c.is_deleted = 0
+          GROUP BY email, first_name, last_name
+          HAVING COUNT(DISTINCT c.id)=1
+          ) uniques ON m.email = uniques.email AND m.first_name = uniques.first_name AND m.last_name = uniques.last_name
+        SET m.cid_guess = uniques.contact_id
+        WHERE m.first_name != '' AND m.last_name != ''
+        ");
+  }
+  /**
+   * Drop tmp_mailchimp_push_m and tmp_mailchimp_push_c, if they exist.
+   *
+   * Those tables are created by collectMailchimp() and collectCiviCrm()
+   * for the purposes of syncing to/from Mailchimp/CiviCRM and are not needed
+   * outside of those operations.
+   */
+  public static function dropTemporaryTables() {
+    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
+    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
+  }
+  /**
+   * Drop mailchimp_log table if it exists.
+   *
+   * This table holds errors from multiple lists in Mailchimp where the contact
+   * could not be identified in CiviCRM; typically these contacts are
+   * un-sync-able ("Titanics").
+   */
+  public static function dropLogTable() {
+    CRM_Core_DAO::executeQuery("DROP TABLE IF EXISTS mailchimp_log;");
+  }
+  /**
+   * Create new tmp_mailchimp_push_m.
+   *
+   * Nb. these are temporary tables but we don't use TEMPORARY table because
+   * they are needed over multiple sessions because of queue.
+   *
+   *
+   * cid_guess column is the contact id that this record will be sync-ed to.
+   * It after both collections and a matchMailchimpMembersToContacts call it
+   * will be
+   *
+   * - A contact id
+   * - Zero meaning we can create a new contact
+   * - NULL meaning we must ignore this because otherwise we might end up
+   *   making endless duplicates.
+   *
+   * Because a lot of matching is done on this, it has an index. Nb. a test was
+   * done trying the idea of adding the non-unique key at the end of the
+   * collection; heavily-keyed tables can slow down mass-inserts, so sometimes's
+   * it's quicker to add an index after an update. However this only saved 0.1s
+   * over 5,000 records import, so this code was removed for the sake of KISS.
+   *
+   * The speed of collecting from Mailchimp, is, as you might expect, determined
+   * by Mailchimp's API which seems to take about 3s for 1,000 records.
+   * Inserting them into the tmp table takes about 1s per 1,000 records on my
+   * server, so about 4s/1000 members.
+   */
+  public static function createTemporaryTableForMailchimp() {
+    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");
+    $dao = CRM_Core_DAO::executeQuery(
+      "CREATE TABLE tmp_mailchimp_push_m (
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        hash CHAR(32) NOT NULL,
+        interests VARCHAR(4096) NOT NULL,
+        cid_guess INT(10) DEFAULT NULL,
+        PRIMARY KEY (email, hash),
+        KEY (cid_guess))
+        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+
+    // Convenience in collectMailchimp.
+    return $dao;
+  }
+  /**
+   * Create new tmp_mailchimp_push_c.
+   *
+   * Nb. these are temporary tables but we don't use TEMPORARY table because
+   * they are needed over multiple sessions because of queue.
+   */
+  public static function createTemporaryTableForCiviCRM() {
+    CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_c;");
+    $dao = CRM_Core_DAO::executeQuery("CREATE TABLE tmp_mailchimp_push_c (
+        contact_id INT(10) UNSIGNED NOT NULL,
+        email VARCHAR(200) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        hash CHAR(32) NOT NULL,
+        interests VARCHAR(4096) NOT NULL,
+        PRIMARY KEY (email, hash),
+        KEY (contact_id)
+        )
+        ENGINE=InnoDB DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci ;");
+    return $dao;
+  }
+  /**
+   * Logic to determine update needed.
+   *
+   * This is separate from the method that collects a batch update so that it
+   * can be tested more easily.
+   *
+   * @param array $merge_fields an array where the *keys* are 'tag' names from
+   * Mailchimp's merge_fields resource. e.g. FNAME, LNAME.
+   * @param array $civi_details Array of civicrm details from
+   * tmp_mailchimp_push_c
+   * @param array $mailchimp_details Array of mailchimp details from
+   * tmp_mailchimp_push_m
+   * @return array changes in format required by Mailchimp API.
+   */
+  public static function updateMailchimpFromCiviLogic($merge_fields, $civi_details, $mailchimp_details) {
+
+    $params = [];
+    // I think possibly some installations don't have Multibyte String Functions
+    // installed?
+    $lower = function_exists('mb_strtolower') ? 'mb_strtolower' : 'strtolower';
+
+    if ($civi_details['email'] && $lower($civi_details['email']) != $lower($mailchimp_details['email'])) {
+      // This is the case for additions; when we're adding someone new.
+      $params['email_address'] = $civi_details['email'];
+    }
+
+    if ($civi_details['interests'] && $civi_details['interests'] != $mailchimp_details['interests']) {
+      // Civi's Interest field will unpack to an empty array if we don't have
+      // any mapped interest groups. In this case we don't need to send the
+      // interests to Mailchimp at all, so we check for that.
+      // In the case of adding a new person from CiviCRM to Mailchimp, the
+      // Mailchimp interests passed in will be empty, but the CiviCRM one will
+      // be 'a:0:{}' since that is the serialized version of [].
+      $interests = unserialize($civi_details['interests']);
+      if (!empty($interests)) {
+        $params['interests'] = $interests;
+      }
+    }
+
+    $name_changed = FALSE;
+    if ($civi_details['first_name'] && $civi_details['first_name'] != $mailchimp_details['first_name']) {
+      $name_changed = TRUE;
+      // First name mismatch.
+      if (isset($merge_fields['FNAME'])) {
+        // FNAME field exists, so set it.
+        $params['merge_fields']['FNAME'] = $civi_details['first_name'];
+      }
+    }
+    if ($civi_details['last_name'] && $civi_details['last_name'] != $mailchimp_details['last_name']) {
+      $name_changed = TRUE;
+      if (isset($merge_fields['LNAME'])) {
+        // LNAME field exists, so set it.
+        $params['merge_fields']['LNAME'] = $civi_details['last_name'];
+      }
+    }
+    if ($name_changed && key_exists('NAME', $merge_fields)) {
+      // The name was changed and this list has a NAME field. Supply first last
+      // names to this field.
+      $params['merge_fields']['NAME'] = trim("$civi_details[first_name] $civi_details[last_name]");
+    }
+
+    return $params;
+  }
+
+  /**
+   * Logic to determine update needed for pull.
+   *
+   * This is separate from the method that collects a batch update so that it
+   * can be tested more easily.
+   *
+   * @param array $mailchimp_details Array of mailchimp details from
+   * tmp_mailchimp_push_m, with keys first_name, last_name
+   * @param array $civi_details Array of civicrm details from
+   * tmp_mailchimp_push_c, with keys first_name, last_name
+   * @return array changes in format required by Mailchimp API.
+   */
+  public static function updateCiviFromMailchimpContactLogic($mailchimp_details, $civi_details) {
+
+    $edits = [];
+
+    foreach (['first_name', 'last_name'] as $field) {
+      if ($mailchimp_details[$field] && $mailchimp_details[$field] != $civi_details[$field]) {
+        $edits[$field] = $mailchimp_details[$field];
+      }
+    }
+
+    return $edits;
+  }
+
   /**
    * There's probably a better way to do this.
    */
