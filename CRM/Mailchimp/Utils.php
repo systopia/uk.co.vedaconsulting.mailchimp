@@ -478,9 +478,6 @@ class CRM_Mailchimp_Utils {
    * Return the grouping name for given list, grouping MC Ids.
    */
   static function getMCCategoryName($listID, $category_id) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $category_id', $category_id);
-
     $info = static::getMCInterestGroupings($listID);
 
     // Check list, grouping, and group exist
@@ -488,7 +485,7 @@ class CRM_Mailchimp_Utils {
     if (!empty($info[$category_id])) {
       $name = $info[$category_id]['name'];
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCCategoryName $name ', $name);
+    CRM_Mailchimp_Utils::checkDebug("CRM_Mailchimp_Utils::getMCCategoryName for list $listID cat $categories returning $name");
     return $name;
   }
 
@@ -513,14 +510,13 @@ class CRM_Mailchimp_Utils {
    *
    */
   static function getMCInterestGroupings($listID) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCInterestGroupings $listID', $listID);
 
     if (empty($listID)) {
+      CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Utils::getMCInterestGroupings called without list id');
       return NULL;
     }
 
     $mapper = &static::$mailchimp_interest_details;
-
     if (!array_key_exists($listID, $mapper)) {
       $mapper[$listID] = array();
 
@@ -569,7 +565,7 @@ class CRM_Mailchimp_Utils {
         }
       }
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCInterestGroupings $mapper', $mapper[$listID]);
+    CRM_Mailchimp_Utils::checkDebug("CRM_Mailchimp_Utils::getMCInterestGroupings for list '$listID' returning ", $mapper[$listID]);
     return $mapper[$listID];
   }
 
@@ -950,14 +946,9 @@ class CRM_Mailchimp_Utils {
       }
       else {
         // Log a variable.
-        CRM_Core_Error::debug_var(
-          $description,
-          $variable,
-          $print = FALSE,
-          $log = TRUE,
-          // Use a separate component for our logfiles in ConfigAndLog
-          $comp = 'mailchimp' 
-        );
+        CRM_Core_Error::debug_log_message(
+          $description . "\n" . var_export($variable,1)
+          , FALSE, 'mailchimp');
       }
     }
   }

@@ -136,6 +136,7 @@ class CRM_Mailchimp_Sync {
     // Main loop of all the records.
     $collected = 0;
     while ($members = $fetch_batch()) {
+      $start = microtime(TRUE);
       foreach ($members as $member) {
         $first_name = isset($member->merge_fields->FNAME) ? $member->merge_fields->FNAME : '';
         $last_name  = isset($member->merge_fields->LNAME) ? $member->merge_fields->LNAME : '';
@@ -176,6 +177,7 @@ class CRM_Mailchimp_Sync {
         }
         $collected++;
       }
+      CRM_Mailchimp_Utils::checkDebug('collectMailchimp took ' . round(microtime(TRUE) - $start,2) . 's to copy ' . count($members) . ' mailchimp Members to tmp table.');
     }
 
     // Tidy up.
@@ -575,6 +577,27 @@ class CRM_Mailchimp_Sync {
    *
    * Nb. these are temporary tables but we don't use TEMPORARY table because
    * they are needed over multiple sessions because of queue.
+   *
+   *
+   * cid_guess column is the contact id that this record will be sync-ed to.
+   * It after both collections and a matchMailchimpMembersToContacts call it
+   * will be
+   *
+   * - A contact id
+   * - Zero meaning we can create a new contact
+   * - NULL meaning we must ignore this because otherwise we might end up
+   *   making endless duplicates.
+   *
+   * Because a lot of matching is done on this, it has an index. Nb. a test was
+   * done trying the idea of adding the non-unique key at the end of the
+   * collection; heavily-keyed tables can slow down mass-inserts, so sometimes's
+   * it's quicker to add an index after an update. However this only saved 0.1s
+   * over 5,000 records import, so this code was removed for the sake of KISS.
+   *
+   * The speed of collecting from Mailchimp, is, as you might expect, determined
+   * by Mailchimp's API which seems to take about 3s for 1,000 records.
+   * Inserting them into the tmp table takes about 1s per 1,000 records on my
+   * server, so about 4s/1000 members.
    */
   public static function createTemporaryTableForMailchimp() {
     CRM_Core_DAO::executeQuery( "DROP TABLE IF EXISTS tmp_mailchimp_push_m;");

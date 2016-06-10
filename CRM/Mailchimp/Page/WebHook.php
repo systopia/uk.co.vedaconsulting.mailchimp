@@ -43,6 +43,12 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
       $response_object = NULL;
       CRM_Mailchimp_Utils::checkDebug("Webhook RuntimeException code $response_code (200 means OK): " . $e->getMessage());
     }
+    catch (Exception $e) {
+      // Broad catch.
+      $response_code = 500;
+      $response_object = NULL;
+      CRM_Mailchimp_Utils::checkDebug("Webhook " . get_class($e) . ": " . $e->getMessage());
+    }
 
     // Serve HTTP response.
     if ($response_code != 200) {
