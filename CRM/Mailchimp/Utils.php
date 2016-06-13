@@ -52,7 +52,7 @@ class CRM_Mailchimp_Utils {
    * but only including groups you're interested in.
    * @return array CiviCRM groupIds.
    */
-  static function splitGroupTitles($group_titles, $group_details) {
+  public static function splitGroupTitles($group_titles, $group_details) {
     $groups = [];
 
     // Sort the group titles by length, longest first.
@@ -75,7 +75,7 @@ class CRM_Mailchimp_Utils {
   /**
    * Returns the webhook URL.
    */
-  static function getWebhookUrl() {
+  public static function getWebhookUrl() {
     $security_key = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'security_key', NULL, FALSE);
     if (empty($security_key)) {
       // @Todo what exception should this throw?
@@ -101,7 +101,7 @@ class CRM_Mailchimp_Utils {
    * @param bool $reset If set it will replace the API object with a default.
    * Only useful after changing stored credentials.
    */
-  static function getMailchimpApi($reset=FALSE) {
+  public static function getMailchimpApi($reset=FALSE) {
     if ($reset) {
       static::$mailchimp_api = NULL;
     }
@@ -128,28 +128,18 @@ class CRM_Mailchimp_Utils {
    *
    * This is for testing purposes only.
    */
-  static function setMailchimpApi(CRM_Mailchimp_Api3 $api) {
+  public static function setMailchimpApi(CRM_Mailchimp_Api3 $api) {
     static::$mailchimp_api = $api;
   }
 
   /**
    * Reset caches.
    */
-  static function resetAllCaches() {
+  public static function resetAllCaches() {
     static::$mailchimp_api = NULL;
     static::$mailchimp_lists = NULL;
     static::$mailchimp_interest_details = [];
   }
-  /**
-   * deprecated (soon!) v1 API
-   */
-  static function mailchimp() {
-    $apiKey   = CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key');
-    $mcClient = new Mailchimp($apiKey);
-    //CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils mailchimp $mcClient', $mcClient);
-    return $mcClient;
-  }
-
   /**
    * Check all mapped groups' lists.
    *
@@ -309,29 +299,32 @@ class CRM_Mailchimp_Utils {
   /**
    * Look up an array of CiviCRM groups linked to Maichimp groupings.
    *
-   * Indexed by CiviCRM groupId, including:
    *
-   * - list_id    (MC)
-   *
-   * - grouping_id(MC) // deprecate
-   * - grouping_name (MC) // deprecate
-   * - group_id   (MC) // deprecate
-   * - group_name (MC) // deprecate
-   *
-   * - category_id(MC)
-   * - category_name (MC)
-   * - interest_id   (MC)
-   * - interest_name (MC)
-   * - is_mc_update_grouping (bool) - is the subscriber allowed to update this via MC interface?
-   * - civigroup_title
-   * - civigroup_uses_cache boolean
    *
    * @param $groupIDs mixed array of CiviCRM group Ids to fetch data for; or empty to return ALL mapped groups.
    * @param $mc_list_id mixed Fetch for a specific Mailchimp list only, or null.
    * @param $membership_only bool. Only fetch mapped membership groups (i.e. NOT linked to a MC grouping).
-   *
+   * @return array keyed by CiviCRM group id whose values are arrays of details
+   *         including:
+   *         // Details about Mailchimp
+   *         'list_id'
+   *         'list_name'
+   *         'category_id'
+   *         'category_name'
+   *         'interest_id'
+   *         'interest_name'
+   *         // Details from CiviCRM
+   *         'civigroup_title'
+   *         'civigroup_uses_cache'
+   *         'is_mc_update_grouping'  bool: is the subscriber allowed to update this
+   *                                  via MC interface?
+   *         // Deprecated DO NOT USE from Mailchimp.
+   *         'grouping_id'
+   *         'grouping_name'
+   *         'group_id'
+   *         'group_name'
    */
-  static function getGroupsToSync($groupIDs = array(), $mc_list_id = null, $membership_only = FALSE) {
+  public static function getGroupsToSync($groupIDs = array(), $mc_list_id = null, $membership_only = FALSE) {
 
     $params = $groups = $temp = array();
     $groupIDs = array_filter(array_map('intval',$groupIDs));
@@ -392,47 +385,6 @@ class CRM_Mailchimp_Utils {
     return $groups;
   }
 
-  static function getGroupIDsToSync() {
-    $groupIDs = self::getGroupsToSync();
-    return array_keys($groupIDs);
-  }
-
-  static function getMemberCountForGroupsToSync($groupIDs = array()) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupsToSync $groupIDs', $groupIDs);
-    $group = new CRM_Contact_DAO_Group();
-    foreach ($groupIDs as $key => $value) {
-    $group->id  = $value;      
-    }
-    $group->find(TRUE);
-    
-    if (empty($groupIDs)) {
-      $groupIDs = self::getGroupIDsToSync();
-    }
-    if(!empty($groupIDs) && $group->saved_search_id){
-      $groupIDs = implode(',', $groupIDs);
-      $smartGroupQuery = " 
-                  SELECT count(*)
-                  FROM civicrm_group_contact_cache smartgroup_contact
-                  WHERE smartgroup_contact.group_id IN ($groupIDs)";
-      $count = CRM_Core_DAO::singleValueQuery($smartGroupQuery);
-      CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMemberCountForGroupsToSync $count', $count);
-      return $count;
-				  
-      
-    }
-    else if (!empty($groupIDs)) {
-      $groupIDs = implode(',', $groupIDs);
-      $query    = "
-        SELECT  count(*)
-        FROM    civicrm_group_contact
-        WHERE   status = 'Added' AND group_id IN ($groupIDs)";
-      $count = CRM_Core_DAO::singleValueQuery($query);
-      CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMemberCountForGroupsToSync $count', $count);
-      return $count;
-    }
-    return 0;
-  }
-
   /**
    * Return the name at mailchimp for the given Mailchimp list id.
    *
@@ -456,43 +408,6 @@ class CRM_Mailchimp_Utils {
   }
 
   /**
-   * return the group name for given list, grouping and group
-   *
-   */
-  static function getMCInterestName($listID, $category_id, $interest_id) {
-    CRM_Mailchimp_Utils::checkDebug(__FUNCTION__ . " called for list $listID, category $category_id, interest $interest_id");
-    $info = static::getMCInterestGroupings($listID);
-
-    // Check list, grouping, and group exist
-    if (empty($info[$category_id]['interests'][$interest_id])) {
-      $name = null;
-    }
-    else {
-      $name = $info[$category_id]['interests'][$interest_id]['name'];
-    }
-    CRM_Mailchimp_Utils::checkDebug('End-' . __FUNCTION__, $name);
-    return $name;
-  }
-
-  /**
-   * Return the grouping name for given list, grouping MC Ids.
-   */
-  static function getMCCategoryName($listID, $category_id) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCCategoryName $category_id', $category_id);
-
-    $info = static::getMCInterestGroupings($listID);
-
-    // Check list, grouping, and group exist
-    $name = NULL;
-    if (!empty($info[$category_id])) {
-      $name = $info[$category_id]['name'];
-    }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCCategoryName $name ', $name);
-    return $name;
-  }
-
-  /**
    * Get interest groupings for given ListID (cached).
    *
    * Nb. general API function used by several other helper functions.
@@ -512,15 +427,14 @@ class CRM_Mailchimp_Utils {
    *   )
    *
    */
-  static function getMCInterestGroupings($listID) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMCInterestGroupings $listID', $listID);
+  public static function getMCInterestGroupings($listID) {
 
     if (empty($listID)) {
+      CRM_Mailchimp_Utils::checkDebug('CRM_Mailchimp_Utils::getMCInterestGroupings called without list id');
       return NULL;
     }
 
     $mapper = &static::$mailchimp_interest_details;
-
     if (!array_key_exists($listID, $mapper)) {
       $mapper[$listID] = array();
 
@@ -569,14 +483,47 @@ class CRM_Mailchimp_Utils {
         }
       }
     }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getMCInterestGroupings $mapper', $mapper[$listID]);
+    CRM_Mailchimp_Utils::checkDebug("CRM_Mailchimp_Utils::getMCInterestGroupings for list '$listID' returning ", $mapper[$listID]);
     return $mapper[$listID];
+  }
+
+  /**
+   * return the group name for given list, grouping and group
+   *
+   */
+  public static function getMCInterestName($listID, $category_id, $interest_id) {
+    $info = static::getMCInterestGroupings($listID);
+
+    // Check list, grouping, and group exist
+    if (empty($info[$category_id]['interests'][$interest_id])) {
+      $name = null;
+    }
+    else {
+      $name = $info[$category_id]['interests'][$interest_id]['name'];
+    }
+    CRM_Mailchimp_Utils::checkDebug(__FUNCTION__ . " called for list '$listID', category '$category_id', interest '$interest_id', returning '$name'");
+    return $name;
+  }
+
+  /**
+   * Return the grouping name for given list, grouping MC Ids.
+   */
+  public static function getMCCategoryName($listID, $category_id) {
+    $info = static::getMCInterestGroupings($listID);
+
+    // Check list, grouping, and group exist
+    $name = NULL;
+    if (!empty($info[$category_id])) {
+      $name = $info[$category_id]['name'];
+    }
+    CRM_Mailchimp_Utils::checkDebug("CRM_Mailchimp_Utils::getMCCategoryName for list $listID cat $categories returning $name");
+    return $name;
   }
 
   /**
    * Get Mailchimp group ID group name
    */
-  static function getMailchimpGroupIdFromName($listID, $groupName) {
+  public static function getMailchimpGroupIdFromName($listID, $groupName) {
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMailchimpGroupIdFromName $listID', $listID);
     CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getMailchimpGroupIdFromName $groupName', $groupName);
 
@@ -602,341 +549,6 @@ class CRM_Mailchimp_Utils {
     }
   }
   
-  static function getGroupIdForMailchimp($listID, $groupingID, $groupID) {
-
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupIdForMailchimp $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupIdForMailchimp $groupingID', $groupingID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupIdForMailchimp $groupID', $groupID);
-
-    if (empty($listID)) {
-      return NULL;
-    }
-    
-    if (!empty($groupingID) && !empty($groupID)) {
-      $whereClause = "mc_list_id = %1 AND mc_grouping_id = %2 AND mc_group_id = %3";
-    } else {
-      $whereClause = "mc_list_id = %1";
-    }
-
-    $query  = "
-      SELECT  entity_id
-      FROM    civicrm_value_mailchimp_settings mcs
-      WHERE   $whereClause";
-    $params = 
-        array(
-          '1' => array($listID , 'String'),
-          '2' => array($groupingID , 'String'),
-          '3' => array($groupID , 'String'),
-        );
-    $dao = CRM_Core_DAO::executeQuery($query, $params);
-    if ($dao->fetch()) {
-      CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupIdForMailchimp $dao->entity_id', $dao->entity_id);
-      return $dao->entity_id;
-    }
-    
-  }
-  
-
-
-  static function getContactFromEmail($email, $primary = TRUE) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getContactFromEmail $email', $email);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getContactFromEmail $primary', $primary);
-
-    $primaryEmail  = 1;
-    if(!$primary) {
-     $primaryEmail = 0;
-    }
-    $contactids = array();
-    $query = "
-      SELECT `contact_id` FROM civicrm_email ce
-      INNER JOIN civicrm_contact cc ON ce.`contact_id` = cc.id
-      WHERE ce.email = %1 AND ce.is_primary = {$primaryEmail} AND cc.is_deleted = 0 ";
-    $dao   = CRM_Core_DAO::executeQuery($query, array( '1' => array($email, 'String'))); 
-    while($dao->fetch()) {
-      $contactids[] = $dao->contact_id;
-    }
-    
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getContactFromEmail $contactids', $contactids);
-
-    return $contactids;
-  }
-  
-  static function updateParamsExactMatch($contactids = array(), $params) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils updateParamsExactMatch $params', $params);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils updateParamsExactMatch $contactids', $contactids);
-
-
-    $contactParams =
-        array(
-          'version'       => 3,
-          'contact_type'  => 'Individual',
-          'first_name'    => $params['FNAME'],
-          'last_name'     => $params['LNAME'],
-          'email'         => $params['EMAIL'],
-        );
-    if(count($contactids) == 1) {
-        $contactParams['id'] = $contactids[0];
-        unset($contactParams['contact_type']);
-        // Don't update firstname/lastname if it was empty
-        if(empty($params['FNAME']))
-          unset($contactParams['first_name']);
-        if(empty($params['LNAME']))
-          unset ($contactParams['last_name']);
-      }
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils updateParamsExactMatch $contactParams', $contactParams);
-
-    return $contactParams;
-  }
-  /**
-   * Function to get the associated CiviCRM Groups IDs for the Grouping array
-   * sent from Mialchimp Webhook.
-   *
-   * Note: any groupings from Mailchimp that do not map to CiviCRM groups are
-   * silently ignored. Also, if a subscriber has no groupings, this function
-   * will not return any CiviCRM groups (because all groups must be mapped to
-   * both a list and a grouping).
-   */
-  static function getCiviGroupIdsforMcGroupings($listID, $mcGroupings) {
-
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getCiviGroupIdsforMcGroupings $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getCiviGroupIdsforMcGroupings $mcGroupings', $mcGroupings);
-
-    if (empty($listID) || empty($mcGroupings)) {
-      return array();
-    }
-    $civiGroups = array();
-    foreach ($mcGroupings as $key => $mcGrouping) {
-      if(!empty($mcGrouping['groups'])) {
-        $mcGroups = @explode(',', $mcGrouping['groups']);
-        foreach ($mcGroups as $mcGroupKey => $mcGroupName) {
-          // Get Mailchimp group ID from group name. Only group name is passed in by Webhooks
-          $mcGroupID = self::getMailchimpGroupIdFromName($listID, trim($mcGroupName));
-          // Mailchimp group ID is unavailable
-          if (empty($mcGroupID)) {
-            // Try the next one.
-            continue;
-          }
-
-          // Find the CiviCRM group mapped with the Mailchimp List and Group
-          $civiGroupID = self::getGroupIdForMailchimp($listID, $mcGrouping['id'] , $mcGroupID);
-          if (!empty($civiGroupID)) {
-            $civiGroups[] = $civiGroupID;
-          }
-        }
-      }
-    }
- 
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getCiviGroupIdsforMcGroupings $civiGroups', $civiGroups);
-    return $civiGroups;
-  }
-
-  /**
-   * Function to get CiviCRM Groups for the specific Mailchimp list in which the Contact is Added to
-   */
-  static function getGroupSubscriptionforMailchimpList($listID, $contactID) {
-
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupSubscriptionforMailchimpList $listID', $listID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupSubscriptionforMailchimpList $contactID', $contactID);
-
-    if (empty($listID) || empty($contactID)) {
-      return NULL;
-    }
-    
-    $civiMcGroups = array();
-    $query  = "
-      SELECT  entity_id
-      FROM    civicrm_value_mailchimp_settings mcs
-      WHERE   mc_list_id = %1";
-    $params = array('1' => array($listID, 'String'));
-    
-    $dao = CRM_Core_DAO::executeQuery($query ,$params);
-    while ($dao->fetch()) {
-      $groupContact = new CRM_Contact_BAO_GroupContact();
-      $groupContact->group_id = $dao->entity_id;
-      $groupContact->contact_id = $contactID;
-      $groupContact->whereAdd("status = 'Added'");
-      $groupContact->find();
-      if ($groupContact->fetch()) {
-        $civiMcGroups[] = $dao->entity_id;
-      }
-    }
-  
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupSubscriptionforMailchimpList $civiGroups', $civiGroups);
-
-    return $civiMcGroups;
-  }
-  
-  
-   /**
-   * Function to call syncontacts with smart groups and static groups
-   *
-   * Returns object that can iterate over a slice of the live contacts in given group.
-   */
-  static function getGroupContactObject($groupID, $start = null) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupContactObject $groupID', $groupID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupContactObject $start', $start);
-
-    $group           = new CRM_Contact_DAO_Group();
-    $group->id       = $groupID;
-    $group->find();
-
-    if($group->fetch()){
-      //Check smart groups (including parent groups, which function as smart groups).
-      if($group->saved_search_id || $group->children){
-        $groupContactCache = new CRM_Contact_BAO_GroupContactCache();
-        $groupContactCache->group_id = $groupID;
-        if ($start !== null) {
-          $groupContactCache->limit($start, CRM_Mailchimp_Form_Sync::BATCH_COUNT);
-        }
-        $groupContactCache->find();
-        CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupContactObject $groupContactCache', $groupContactCache);
-        return $groupContactCache;
-      }
-      else {
-        $groupContact = new CRM_Contact_BAO_GroupContact();
-        $groupContact->group_id = $groupID;
-        $groupContact->whereAdd("status = 'Added'");
-        if ($start !== null) {
-          $groupContact->limit($start, CRM_Mailchimp_Form_Sync::BATCH_COUNT);
-        }
-        $groupContact->find();
-        CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupContactObject $groupContact', $groupContact);
-        return $groupContact;
-      }
-    }
-    return FALSE;
-  }
-   /**
-   * Function to call syncontacts with smart groups and static groups xxx delete
-   *
-   * Returns object that can iterate over a slice of the live contacts in given group.
-   */
-  static function getGroupMemberships($groupIDs) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils getGroupMemberships $groupIDs', $groupIDs);
-
-
-    $group           = new CRM_Contact_DAO_Group();
-    $group->id       = $groupID;
-    $group->find();
-
-    if($group->fetch()){
-      //Check smart groups
-      if($group->saved_search_id){
-        $groupContactCache = new CRM_Contact_BAO_GroupContactCache();
-        $groupContactCache->group_id = $groupID;
-        if ($start !== null) {
-          $groupContactCache->limit($start, CRM_Mailchimp_Form_Sync::BATCH_COUNT);
-        }
-        $groupContactCache->find();
-        CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupMemberships $groupContactCache', $groupContactCache);
-        return $groupContactCache;
-      }
-      else {
-        $groupContact = new CRM_Contact_BAO_GroupContact();
-        $groupContact->group_id = $groupID;
-        $groupContact->whereAdd("status = 'Added'");
-        if ($start !== null) {
-          $groupContact->limit($start, CRM_Mailchimp_Form_Sync::BATCH_COUNT);
-        }
-        $groupContact->find();
-        CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils getGroupMemberships $groupContact', $groupContact);
-        return $groupContact;
-      }
-    }
-    
-    return FALSE;
-  }
-  
-  /**
-   * Function to subscribe/unsubscribe civicrm contact in Mailchimp list
-	 *
-	 * $groupDetails - Array
-	 *	(
-	 *			[list_id] => ec641f8988
-	 *		  [grouping_id] => 14397
-	 *			[group_id] => 35609
-	 *			[is_mc_update_grouping] => 
-	 *			[group_name] => 
-	 *			[grouping_name] => 
-	 *			[civigroup_title] => Easter Newsletter
-	 *			[civigroup_uses_cache] => 
-	 * )
-	 * 
-	 * $action - subscribe/unsubscribe
-   */
-  static function subscribeOrUnsubsribeToMailchimpList($groupDetails, $contactID, $action) {
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $groupDetails', $groupDetails);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $contactID', $contactID);
-    CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $action', $action);
-
-    if (empty($groupDetails) || empty($contactID) || empty($action)) {
-      return NULL;
-    }
-    
-    // We need to get contact's email before subscribing in Mailchimp
-		$contactParams = array(
-			'version'       => 3,
-			'id'  					=> $contactID,
-		);
-
-		$contactResult = civicrm_api('Contact' , 'get' , $contactParams);
-		// This is the primary email address of the contact
-		$email = $contactResult['values'][$contactID]['email'];
-		
-		if (empty($email)) {
-			// Its possible to have contacts in CiviCRM without email address
-			// and add to group offline
-			return;
-		}
-		
-		// Optional merges for the email (FNAME, LNAME)
-		$merge = array(
-			'FNAME' => $contactResult['values'][$contactID]['first_name'],
-			'LNAME' => $contactResult['values'][$contactID]['last_name'],
-		);
-	
-		$listID = $groupDetails['list_id'];
-		$grouping_id = $groupDetails['grouping_id'];
-		$group_id = $groupDetails['group_id'];
-		if (!empty($grouping_id) AND !empty($group_id)) {
-			$merge_groups[$grouping_id] = array('id'=> $groupDetails['grouping_id'], 'groups'=>array());
-			$merge_groups[$grouping_id]['groups'][] = CRM_Mailchimp_Utils::getMCInterestName($listID, $grouping_id, $group_id);
-			
-			// remove the significant array indexes, in case Mailchimp cares.
-			$merge['groupings'] = array_values($merge_groups);
-		}
-		
-		// Send Mailchimp Lists API Call.
-		$list = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-		switch ($action) {
-			case "subscribe":
-				// http://apidocs.mailchimp.com/api/2.0/lists/subscribe.php
-				try {
-					$result = $list->subscribe($listID, array('email' => $email), $merge, $email_type='html', $double_optin=FALSE, $update_existing=FALSE, $replace_interests=TRUE, $send_welcome=FALSE);
-				}
-				catch (Exception $e) {
-          // Don't display if the error is that we're already subscribed.
-          $message = $e->getMessage();
-          if ($message !== $email . ' is already subscribed to the list.') {
-            CRM_Core_Session::setStatus($message);
-          }
-				}
-				break;
-			case "unsubscribe":
-				// https://apidocs.mailchimp.com/api/2.0/lists/unsubscribe.php
-				try {
-					$result = $list->unsubscribe($listID, array('email' => $email), $delete_member=false, $send_goodbye=false, $send_notify=false);
-				}
-				catch (Exception $e) {
-					CRM_Core_Session::setStatus($e->getMessage());
-				}
-				break;
-		}
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $groupDetails', $groupDetails);
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $contactID', $contactID);
-    CRM_Mailchimp_Utils::checkDebug('End-CRM_Mailchimp_Utils subscribeOrUnsubsribeToMailchimpList $action', $action);
-  }
-
   /**
    * Log a message and optionally a variable, if debugging is enabled.
    */
@@ -950,15 +562,23 @@ class CRM_Mailchimp_Utils {
       }
       else {
         // Log a variable.
-        CRM_Core_Error::debug_var(
-          $description,
-          $variable,
-          $print = FALSE,
-          $log = TRUE,
-          // Use a separate component for our logfiles in ConfigAndLog
-          $comp = 'mailchimp' 
-        );
+        CRM_Core_Error::debug_log_message(
+          $description . "\n" . var_export($variable,1)
+          , FALSE, 'mailchimp');
       }
     }
   }
+
+  // Deprecated - remove these once Mailchimp turn off APIv2, scheduled end of
+  // 2016.
+  /**
+   * deprecated (soon!) v1, v2 API
+   */
+  public static function mailchimp() {
+    $apiKey   = CRM_Core_BAO_Setting::getItem(CRM_Mailchimp_Form_Setting::MC_SETTING_GROUP, 'api_key');
+    $mcClient = new Mailchimp($apiKey);
+    //CRM_Mailchimp_Utils::checkDebug('Start-CRM_Mailchimp_Utils mailchimp $mcClient', $mcClient);
+    return $mcClient;
+  }
+
 }

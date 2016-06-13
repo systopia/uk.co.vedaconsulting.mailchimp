@@ -1171,6 +1171,122 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
 
   }
   /**
+   * Tests the removeInSync method.
+   *
+   */
+  public function testRemoveInSync() {
+    // Create empty tables.
+    CRM_Mailchimp_Sync::createTemporaryTableForMailchimp();
+    CRM_Mailchimp_Sync::createTemporaryTableForCiviCRM();
+
+    // Prepare the mock for the subscription the post hook will do.
+    $api_prophecy = $this->prophesize('CRM_Mailchimp_Api3');
+    CRM_Mailchimp_Utils::setMailchimpApi($api_prophecy->reveal());
+    $sync = new CRM_Mailchimp_Sync(static::$test_list_id);
+
+    // Test 1.
+    //
+    // Delete records from both tables when there's a cid_guess--contact link
+    // and the hash is the same.
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('found@example.com', 'aaaaaaaaaaaaaaaa', 1),
+      ('red-herring@example.com', 'aaaaaaaaaaaaaaaa', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('found@example.com', 'aaaaaaaaaaaaaaaa', 1),
+      ('notfound@example.com', 'aaaaaaaaaaaaaaaa', 2);");
+
+    $result = $sync->removeInSync('pull');
+    $this->assertEquals(2, $result);
+    $this->assertEquals(0, $sync->countMailchimpMembers());
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+    // Test 2.
+    //
+    // Check different hashes stops removals.
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('found@example.com', 'different', 1),
+      ('red-herring@example.com', 'different', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('found@example.com', 'aaaaaaaaaaaaaaaa', 1),
+      ('notfound@example.com', 'aaaaaaaaaaaaaaaa', 2);");
+
+    $result = $sync->removeInSync('pull');
+    $this->assertEquals(0, $result);
+    $this->assertEquals(2, $sync->countMailchimpMembers());
+    $this->assertEquals(2, $sync->countCiviCrmMembers());
+
+    // Test 3.
+    //
+    // Check nothing removed if no cid-contact match.
+    CRM_Mailchimp_Sync::createTemporaryTableForMailchimp();
+    CRM_Mailchimp_Sync::createTemporaryTableForCiviCRM();
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('found@example.com', 'aaaaaaaaaaaaaaaa', 1),
+      ('red-herring@example.com', 'aaaaaaaaaaaaaaaa', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('found@example.com', 'aaaaaaaaaaaaaaaa', 0),
+      ('notfound@example.com', 'aaaaaaaaaaaaaaaa', NULL);");
+
+    $result = $sync->removeInSync('pull');
+    $this->assertEquals(0, $result);
+    $this->assertEquals(2, $sync->countMailchimpMembers());
+    $this->assertEquals(2, $sync->countCiviCrmMembers());
+
+    // Test 4.
+    //
+    // Check duplicate civi contact deleted.
+    CRM_Mailchimp_Sync::createTemporaryTableForMailchimp();
+    CRM_Mailchimp_Sync::createTemporaryTableForCiviCRM();
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('duplicate@example.com', 'Xaaaaaaaaaaaaaaa', 1),
+      ('duplicate@example.com', 'Yaaaaaaaaaaaaaaa', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('duplicate@example.com', 'bbbbbbbbbbbbbbbb', 1);");
+
+    $result = $sync->removeInSync('push');
+    $this->assertEquals(1, $result);
+    $this->assertEquals(1, $sync->countMailchimpMembers());
+    $this->assertEquals(1, $sync->countCiviCrmMembers());
+
+
+    // Test 5.
+    //
+    // Check duplicate civi contact NOT deleted when in pull mode.
+    CRM_Mailchimp_Sync::createTemporaryTableForMailchimp();
+    CRM_Mailchimp_Sync::createTemporaryTableForCiviCRM();
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('duplicate@example.com', 'Xaaaaaaaaaaaaaaa', 1),
+      ('duplicate@example.com', 'Yaaaaaaaaaaaaaaa', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('duplicate@example.com', 'bbbbbbbbbbbbbbbb', 1);");
+
+    $result = $sync->removeInSync('pull');
+    $this->assertEquals(0, $result);
+    $this->assertEquals(1, $sync->countMailchimpMembers());
+    $this->assertEquals(2, $sync->countCiviCrmMembers());
+
+
+    // Test 5: one contact should be removed because it's in sync, the other
+    // because it's a duplicate.
+    //
+    // Check duplicate civi contact deleted.
+    CRM_Mailchimp_Sync::createTemporaryTableForMailchimp();
+    CRM_Mailchimp_Sync::createTemporaryTableForCiviCRM();
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_c (email, hash, contact_id) VALUES
+      ('duplicate@example.com', 'aaaaaaaaaaaaaaaa', 1),
+      ('duplicate@example.com', 'Yaaaaaaaaaaaaaaa', 2);");
+    CRM_Core_DAO::executeQuery("INSERT INTO tmp_mailchimp_push_m (email, hash, cid_guess) VALUES
+      ('duplicate@example.com', 'aaaaaaaaaaaaaaaa', 1);");
+
+    $result = $sync->removeInSync('push');
+    $this->assertEquals(2, $result);
+    $this->assertEquals(0, $sync->countMailchimpMembers());
+    $this->assertEquals(0, $sync->countCiviCrmMembers());
+
+
+    CRM_Mailchimp_Sync::dropTemporaryTables();
+  }
+  /**
    * Test the webhook checks the key matches.
    *
    * @expectedException RuntimeException
@@ -1234,7 +1350,7 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
    * Test the webhook configured incorrectly.
    *
    * @expectedException RuntimeException
-   * @expectedExceptionMessageRegExp /The list is not configured correctly at Mailchimp/
+   * @expectedExceptionMessageRegExp /The list 'dummylistid' is not configured correctly at Mailchimp/
    */
   public function testWebhookWrongConfig() {
     // We do not change anything on the fixture.
@@ -1383,6 +1499,10 @@ class MailchimpApiIntegrationMockTest extends MailchimpApiIntegrationBase {
    * @depends testGetMCInterestGroupings
    */
   public function testWebhookSubscribeNew() {
+
+    // Remove contact 1 from database.
+    $this->assertGreaterThan(0, static::$civicrm_contact_1['contact_id']);
+    $result = civicrm_api3('Contact', 'delete', ['id' => static::$civicrm_contact_1['contact_id'], 'skip_undelete' => 1]);
 
     $api_prophecy = $this->prepMockForWebhookConfig();
     $w = new CRM_Mailchimp_Page_WebHook();

@@ -35,26 +35,27 @@ function mailchimp_civicrm_install() {
   // Create a cron job to do sync data between CiviCRM and MailChimp.
   $params = array(
     'sequential' => 1,
-    'name'          => 'Mailchimp Sync',
-    'description'   => 'Sync contacts between CiviCRM and MailChimp. Pull from mailchimp is performed before push.',
+    'name'          => 'Mailchimp Push Sync',
+    'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming CiviCRM to be correct. Please understand the implications before using this.',
     'run_frequency' => 'Daily',
     'api_entity'    => 'Mailchimp',
-    'api_action'    => 'sync',
+    'api_action'    => 'pushsync',
     'is_active'     => 0,
   );
   $result = civicrm_api3('job', 'create', $params);
   
-  // create a pull job
-  /*$params = array(
+
+  // Create Pull Sync job.
+  $params = array(
     'sequential' => 1,
-    'name'          => 'Mailchimp Pull',
-    'description'   => 'Pull contacts from mailchimp to civi.',
+    'name'          => 'Mailchimp Pull Sync',
+    'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming Mailchimp to be correct. Please understand the implications before using this.',
     'run_frequency' => 'Daily',
     'api_entity'    => 'Mailchimp',
-    'api_action'    => 'pull',
+    'api_action'    => 'pullsync',
     'is_active'     => 0,
   );
-  $result = civicrm_api3('job', 'create', $params);*/
+  $result = civicrm_api3('job', 'create', $params);
 
   return _mailchimp_civix_civicrm_install();
 }
@@ -295,23 +296,48 @@ function mailchimp_civicrm_postProcess($formName, &$form) {
   }
 }
 /**
- * Implementation of hook_civicrm_pageRun
+ * Implementation of hook_civicrm_pageRun.
+ *
  *
  * @link http://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_pageRun
  */
 function mailchimp_civicrm_pageRun( &$page ) {
   if ($page->getVar('_name') == 'CRM_Group_Page_Group') {
-    $params = array(
-      'version' => 3,
-      'sequential' => 1,
-    );
-    // Get all the mailchimp lists/groups and pass it to template as JS array
-    // To reduce the no. of AJAX calls to get the list/group name in Group Listing Page
-    $result = civicrm_api('Mailchimp', 'getlistsandgroups', $params);
-    if(!$result['is_error']){
-    $list_and_groups = json_encode($result['values']);
-    $page->assign('lists_and_groups', $list_and_groups);
+    // Manage Groups page at /civicrm/group?reset=1
+
+    // Some implementations of javascript don't like using integers for object
+    // keys. Prefix with 'id'.
+    // This combined with templates/CRM/Group/Page/Group.extra.tpl provides js
+    // with a mailchimp_lists variable like: {
+    //   'id12345': 'Membership sync to list Foo',
+    //   'id98765': 'Interest sync to Bar on list Foo',
+    // }
+    $js_safe_object = [];
+    foreach (CRM_Mailchimp_Utils::getGroupsToSync() as $group_id => $group) {
+      if ($group['interest_id']) {
+        if ($group['interest_name']) {
+          $val = strtr(ts("Interest sync to %interest_name on list %list_name"),
+            [
+              '%interest_name' => htmlspecialchars($group['interest_name']),
+              '%list_name'     => htmlspecialchars($group['list_name']),
+            ]);
+        }
+        else {
+          $val = ts("BROKEN interest sync. (perhaps list was deleted?)");
+        }
+      }
+      else {
+        if ($group['list_name']) {
+          $val = strtr(ts("Membership sync to list %list_name"),
+            [ '%list_name'     => htmlspecialchars($group['list_name']), ]);
+        }
+        else {
+          $val = ts("BROKEN membership sync. (perhaps list was deleted?)");
+        }
+      }
+      $js_safe_object['id' . $group_id] = $val;
     }
+    $page->assign('mailchimp_groups', json_encode($js_safe_object));
   }
 }
 
@@ -449,32 +475,37 @@ function mailchimp_civicrm_post( $op, $objectName, $objectId, &$objectRef ) {
 	if ($objectName == 'Individual' || $objectName == 'Organization' || $objectName == 'Household') {
 		// Contact Edited
     // @todo artfulrobot: I don't understand the cases this is dealing with.
+    //                    Perhaps it was trying to check that if someone's been
+    //                    marked as 'opt out' then they're unsubscribed from all
+    //                    mailings. I could not follow the logic though -
+    //                    without tests in place I thought it was better
+    //                    disabled.
     if (FALSE) {
-		if ($op == 'edit' || $op == 'create') {
-			if($objectRef->is_opt_out == 1) {
-				$action = 'unsubscribe';
-			} else {
-				$action = 'subscribe';
-			}
-			
-			// Get all groups, the contact is subscribed to
-			$civiGroups = CRM_Contact_BAO_GroupContact::getGroupList($objectId);
-			$civiGroups = array_keys($civiGroups);
+      if ($op == 'edit' || $op == 'create') {
+        if($objectRef->is_opt_out == 1) {
+          $action = 'unsubscribe';
+        } else {
+          $action = 'subscribe';
+        }
 
-			if (empty($civiGroups)) {
-				return;
-			}
+        // Get all groups, the contact is subscribed to
+        $civiGroups = CRM_Contact_BAO_GroupContact::getGroupList($objectId);
+        $civiGroups = array_keys($civiGroups);
 
-			// Get mailchimp details
-			$groups = CRM_Mailchimp_Utils::getGroupsToSync($civiGroups);
-			
-			if (!empty($groups)) {
-				// Loop through all groups and unsubscribe the email address from mailchimp
-				foreach ($groups as $groupId => $groupDetails) {
-					CRM_Mailchimp_Utils::subscribeOrUnsubsribeToMailchimpList($groupDetails, $objectId, $action);
-				}
-			}
-		}
+        if (empty($civiGroups)) {
+          return;
+        }
+
+        // Get mailchimp details
+        $groups = CRM_Mailchimp_Utils::getGroupsToSync($civiGroups);
+
+        if (!empty($groups)) {
+          // Loop through all groups and unsubscribe the email address from mailchimp
+          foreach ($groups as $groupId => $groupDetails) {
+            // method removed. CRM_Mailchimp_Utils::subscribeOrUnsubsribeToMailchimpList($groupDetails, $objectId, $action);
+          }
+        }
+      }
 
     }
 	}

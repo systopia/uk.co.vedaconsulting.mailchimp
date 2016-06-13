@@ -30,16 +30,24 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
    */
   public function run() {
 
+    CRM_Mailchimp_Utils::checkDebug("Webhook POST: " . serialize($_POST));
     // Empty response object, default response code.
     try {
       $expected_key = CRM_Core_BAO_Setting::getItem(self::MC_SETTING_GROUP, 'security_key', NULL, FALSE);
       $given_key = isset($_GET['key']) ? $_GET['key'] : null;
       list($response_code, $response_object) = $this->processRequest($expected_key, $given_key, $_POST);
+      CRM_Mailchimp_Utils::checkDebug("Webhook response code $response_code (200 = ok)");
     }
     catch (RuntimeException $e) {
       $response_code = $e->getCode();
       $response_object = NULL;
-      // @todo log the message.
+      CRM_Mailchimp_Utils::checkDebug("Webhook RuntimeException code $response_code (200 means OK): " . $e->getMessage());
+    }
+    catch (Exception $e) {
+      // Broad catch.
+      $response_code = 500;
+      $response_object = NULL;
+      CRM_Mailchimp_Utils::checkDebug("Webhook " . get_class($e) . ": " . $e->getMessage());
     }
 
     // Serve HTTP response.
@@ -91,7 +99,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     ) {
       // We are not programmed to respond to this type of request.
       // But maybe Mailchimp introduced something new, so we'll just say OK.
-      throw new RuntimeException("", 200);
+      throw new RuntimeException("Missing or invalid data in request: " . json_encode($request_data), 200);
     }
 
     $method = $request_data['type'];
@@ -106,7 +114,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
       if ($webhook->url == $url) {
         if ($webhook->sources->api) {
           // To continue could cause a nasty loop.
-          throw new RuntimeException("The list is not configured correctly at Mailchimp. It has the 'API' source set so processing this using the API could cause a loop.", 500);
+          throw new RuntimeException("The list '$list_id' is not configured correctly at Mailchimp. It has the 'API' source set so processing this using the API could cause a loop.", 500);
         }
       }
     }
@@ -119,6 +127,7 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
     $this->sync = new CRM_Mailchimp_Sync($request_data['data']['list_id']);
     $this->request_data = $request_data['data'];
     // Call the appropriate handler method.
+    CRM_Mailchimp_Utils::checkDebug("Webhook: $method with request data: " . json_encode($request_data));
     $this->$method();
 
     // re-set the post hooks.
@@ -363,6 +372,25 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
   public function findOrCreateContact() {
     // Find contact.
     try {
+      // Check for missing merges fields.
+      $this->request_data['merges'] += ['FNAME' => '', 'LNAME' => ''];
+      if (  empty($this->request_data['merges']['FNAME'])
+        &&  empty($this->request_data['merges']['LNAME'])
+        && !empty($this->request_data['merges']['NAME'])) {
+        // No first or last names received, but we have a NAME merge field so
+        // try splitting that.
+        $names = explode(' ', $this->request_data['merges']['NAME']);
+        $this->request_data['merges']['FNAME'] = trim(array_shift($names));
+        if ($names) {
+          // Rest of names go as last name.
+          $this->request_data['merges']['LNAME'] = implode(' ', $names);
+        }
+      }
+
+      // Nb. the following will throw an exception if duplication prevents us
+      // adding a contact, so execution will only continue if we were able
+      // either to identify an existing contact, or to identify that the
+      // incomming contact is a new one that we're OK to create.
       $this->contact_id = $this->sync->guessContactIdSingle(
         $this->request_data['email'],
         $this->request_data['merges']['FNAME'],
@@ -370,12 +398,24 @@ class CRM_Mailchimp_Page_WebHook extends CRM_Core_Page {
       );
       if (!$this->contact_id) {
         // New contact, create now.
-        $result = civicrm_api3('GroupContact', 'create', [
+        $result = civicrm_api3('Contact', 'create', [
+          'contact_type' => 'Individual',
           'first_name' => $this->request_data['merges']['FNAME'],
-          'last_name'  => $this->request_data['merges']['FNAME'],
-          'email' => $this->request_data['email'],
+          'last_name'  => $this->request_data['merges']['LNAME'],
         ]);
+        if (!$result['id']) {
+          throw new RuntimeException("Failed to create contact", 500);
+        }
         $this->contact_id = $result['id'];
+        // Create bulk email.
+        $result = civicrm_api3('Email', 'create', [
+          'contact_id' => $this->contact_id,
+          'email' => $this->request_data['email'],
+          'is_bulkmail' => 1,
+          ]);
+        if (!$result['id']) {
+          throw new RuntimeException("Failed to create contact's email", 500);
+        }
       }
     }
     catch (CRM_Mailchimp_DuplicateContactsException $e) {

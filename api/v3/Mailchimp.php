@@ -70,7 +70,70 @@ function civicrm_api3_mailchimp_getinterests($params) {
   return civicrm_api3_create_success($interests);
 }
 
-// Deprecated below here.
+/**
+ * CiviCRM to Mailchimp Push Sync.
+ *
+ * This is a schedulable job.
+ *
+ * Note this was previously named 'sync' and did a pull, then a push request.
+ * However this is problematic because each of these syncs brings the membership
+ * exactly in-line, so there's nothing for the 'push' to do anyway. The pull
+ * will remove any contacts from the synced membership group that are not in the
+ * Mailchimp list. This means any contacts added to the membership group that
+ * have not been sent up to Mailchimp (there are several scenarios when this
+ * happens: bulk additions, smart groups, ...) will be removed from the group
+ * before they've ever been subscribed.
+ *
+ * @param array $params
+ * @return array API result descriptor
+ * @see civicrm_api3_create_success
+ * @see civicrm_api3_create_error
+ * @throws API_Exception
+ */ 
+function civicrm_api3_mailchimp_pushsync($params) {
+	
+	// Do push from CiviCRM to mailchimp 
+  $runner = CRM_Mailchimp_Form_Sync::getRunner($skipEndUrl = TRUE);
+  if ($runner) {
+    $result = $runner->runAll();
+  }
+
+  if ($result['is_error'] == 0) {
+    return civicrm_api3_create_success();
+  }
+  else {
+    return civicrm_api3_create_error();
+  }
+}
+/**
+ * Pull sync from Mailchimp to CiviCRM.
+ *
+ * This is a schedulable job.
+ *
+ * @param array $params
+ * @return array API result descriptor
+ * @see civicrm_api3_create_success
+ * @see civicrm_api3_create_error
+ * @throws API_Exception
+ */ 
+function civicrm_api3_mailchimp_pullsync($params) {
+	
+	// Do push from CiviCRM to mailchimp 
+  $runner = CRM_Mailchimp_Form_Pull::getRunner($skipEndUrl = TRUE);
+  if ($runner) {
+    $result = $runner->runAll();
+  }
+
+  if ($result['is_error'] == 0) {
+    return civicrm_api3_create_success();
+  }
+  else {
+    return civicrm_api3_create_error();
+  }
+}
+
+// Deprecated below here. No code in this extension uses these, so if your 3rd
+// party code does use them time to take action.
 /**
  * Mailchimp Get Mailchimp Membercount API
  *
@@ -200,57 +263,3 @@ function civicrm_api3_mailchimp_getcivicrmgroupmailchimpsettings($params) {
   return civicrm_api3_create_success($groups);
 }
 
-/**
- * CiviCRM to Mailchimp Sync
- *
- * @param array $params
- * @return array API result descriptor
- * @see civicrm_api3_create_success
- * @see civicrm_api3_create_error
- * @throws API_Exception
- */ 
-function civicrm_api3_mailchimp_sync($params) {
-  $groups = CRM_Mailchimp_Utils::getGroupsToSync(array(), null, $membership_only = TRUE);
-  foreach ($groups as $group_id => $details) {
-    $list           = new Mailchimp_Lists(CRM_Mailchimp_Utils::mailchimp());
-    $webhookoutput  = $list->webhooks($details['list_id']);
-    if($webhookoutput[0]['sources']['api'] == 1) {
-      return civicrm_api3_create_error('civicrm_api3_mailchimp_sync -  API is set in Webhook setting for listID '.$details['list_id'].' Please uncheck API' );
-    }
-  }
-  $result = $pullResult = array();
-	
-	// Do pull first from mailchimp to CiviCRM
-	$pullRunner = CRM_Mailchimp_Form_Pull::getRunner($skipEndUrl = TRUE);
-	if ($pullRunner) {
-    $pullResult = $pullRunner->runAll();
-  }
-	
-	// Do push from CiviCRM to mailchimp 
-  $runner = CRM_Mailchimp_Form_Sync::getRunner($skipEndUrl = TRUE);
-  if ($runner) {
-    $result = $runner->runAll();
-  }
-
-  if ($pullResult['is_error'] == 0 && $result['is_error'] == 0) {
-    return civicrm_api3_create_success();
-  }
-  else {
-    return civicrm_api3_create_error();
-  }
-}
-
-/*function civicrm_api3_mailchimp_pull($params) {
-  $result = array();
-  $runner = CRM_Mailchimp_Form_Pull::getRunner($params);
-  if ($runner) {
-    $result = $runner->runAll();
-  }
-
-  if ($result['is_error'] == 0) {
-    return civicrm_api3_create_success();
-  }
-  else {
-    return civicrm_api3_create_error();
-  }
-}*/

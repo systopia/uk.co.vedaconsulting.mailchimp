@@ -76,6 +76,8 @@ class CRM_Mailchimp_Upgrader extends CRM_Mailchimp_Upgrader_Base {
    * Mailchimp in their wisdom changed all the Ids for interests.
    *
    * So we have to map on names and then update our stored Ids.
+   *
+   * Also change cronjobs.
    */
   public function upgrade_20() {
     $this->ctx->log->info('Applying update to v2.0 Updating Mailchimp Interest Ids to fit their new API');
@@ -156,6 +158,44 @@ class CRM_Mailchimp_Upgrader extends CRM_Mailchimp_Upgrader_Base {
           3 => [$params['old'], 'String'],
         ]);
     }
+
+    // Now cron jobs. Delete all mailchimp ones.
+    $result = civicrm_api3('Job', 'get', array(
+      'sequential' => 1,
+      'api_entity' => "mailchimp",
+    ));
+    if ($result['count']) {
+      // Should only be one, but just in case...
+      foreach ($result['values'] as $old) {
+        // Double check id exists!
+        if (!empty($old['id'])) {
+          civicrm_api3('Job', 'delete', ['id' => $old['id']]);
+        }
+      }
+    }
+
+    // Create Push Sync job.
+    $params = array(
+      'sequential' => 1,
+      'name'          => 'Mailchimp Push Sync',
+      'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming CiviCRM to be correct. Please understand the implications before using this.',
+      'run_frequency' => 'Daily',
+      'api_entity'    => 'Mailchimp',
+      'api_action'    => 'pushsync',
+      'is_active'     => 0,
+    );
+    $result = civicrm_api3('job', 'create', $params);
+    // Create Pull Sync job.
+    $params = array(
+      'sequential' => 1,
+      'name'          => 'Mailchimp Pull Sync',
+      'description'   => 'Sync contacts between CiviCRM and MailChimp, assuming Mailchimp to be correct. Please understand the implications before using this.',
+      'run_frequency' => 'Daily',
+      'api_entity'    => 'Mailchimp',
+      'api_action'    => 'pullsync',
+      'is_active'     => 0,
+    );
+    $result = civicrm_api3('job', 'create', $params);
 
     return TRUE;
   }
