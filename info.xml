@@ -8,15 +8,15 @@
     <author>Deepak Srivastava, Kajan, Parvez Saleh and Rich Lott (Artful Robot)</author>
     <email>support@vedaconsulting.co.uk</email>
   </maintainer>
-  <releaseDate>2016-05-08</releaseDate>
-  <version>2.0</version>
-  <develStage>stable</develStage>
+  <releaseDate>2016-09-28</releaseDate>
+  <version>2.0.dev</version>
+  <develStage>testing</develStage>
   <compatibility>
     <ver>4.4</ver>
     <ver>4.5</ver>
     <ver>4.6</ver>
   </compatibility>
-  <comments>Developed by Veda Consulting LTD and Artful Robot.</comments>
+  <comments>GIT Branch https://github.com/systopia/uk.co.vedaconsulting.mailchimp/tree/ae_test</comments>
   <civix>
     <namespace>CRM/Mailchimp</namespace>
   </civix>
